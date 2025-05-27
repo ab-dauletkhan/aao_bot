@@ -258,8 +258,11 @@ async def shutdown_handler(signum, frame):
     logger.info(f"Received signal {signum}. Shutting down gracefully...")
     global application
     if application:
-        await application.stop()
-        await application.shutdown()
+        try:
+            await application.stop()
+            await application.shutdown()
+        except Exception as e:
+            logger.error(f"Error during shutdown: {e}")
     sys.exit(0)
 
 async def main():
@@ -279,10 +282,6 @@ async def main():
     if not ADVISOR_USER_IDS:
         logger.warning("No advisor user IDs configured. Bot commands will not work.")
 
-    # Setup signal handlers for graceful shutdown
-    for sig in [signal.SIGINT, signal.SIGTERM]:
-        signal.signal(sig, lambda s, f: asyncio.create_task(shutdown_handler(s, f)))
-
     application = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
 
     # Add handlers
@@ -299,24 +298,25 @@ async def main():
         logger.info(f"Webhook URL: {webhook_full_url}")
         logger.info(f"Listening on {WEBHOOK_LISTEN_IP}:{WEBHOOK_PORT}")
         
-        try:
-            await application.initialize()
-            await application.bot.set_webhook(
-                url=webhook_full_url,
-                allowed_updates=Update.ALL_TYPES,
-            )
-            await application.start()
-            
-            # Start webhook server (this is blocking)
-            application.run_webhook(
-                listen=WEBHOOK_LISTEN_IP,
-                port=WEBHOOK_PORT,
-                url_path=WEBHOOK_URL_PATH
-            )
-        except Exception as e:
-            logger.error(f"Error starting webhook: {e}")
-            await application.stop()
-            await application.shutdown()
+        # Initialize and start the application
+        await application.initialize()
+        await application.start()
+        
+        # Set webhook
+        await application.bot.set_webhook(
+            url=webhook_full_url,
+            allowed_updates=Update.ALL_TYPES,
+        )
+        
+        logger.info("Bot started successfully in webhook mode")
+        
+        # Run webhook - this method handles the event loop properly
+        application.run_webhook(
+            listen=WEBHOOK_LISTEN_IP,
+            port=WEBHOOK_PORT,
+            url_path=WEBHOOK_URL_PATH,
+            webhook_url=webhook_full_url
+        )
     else:
         # Polling mode
         logger.info("Starting bot in polling mode...")
@@ -344,9 +344,59 @@ async def main():
             await application.shutdown()
             logger.info("Bot shut down gracefully.")
 
+def main_sync():
+    """Synchronous wrapper for the main function to handle webhook mode properly."""
+    global application
+    
+    # Validate required environment variables
+    if not TELEGRAM_TOKEN:
+        logger.error("TELEGRAM_BOT_TOKEN not set. Exiting.")
+        return
+    if not OPENAI_API_KEY:
+        logger.error("OPENAI_API_KEY not set. Exiting.")
+        return
+    if not FAQ_CONTENT: 
+        logger.error("FAQ content is missing. Bot's primary function is impaired. Check faq.md.")
+        return
+    if not ADVISOR_USER_IDS:
+        logger.warning("No advisor user IDs configured. Bot commands will not work.")
+
+    application = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
+
+    # Add handlers
+    application.add_handler(CommandHandler("start", start_command))
+    application.add_handler(CommandHandler("stop", stop_command))
+    application.add_handler(CommandHandler("status", status_command))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    application.add_error_handler(error_handler)
+
+    if WEBHOOK_DOMAIN:
+        # Webhook mode - use synchronous approach
+        webhook_full_url = f"{WEBHOOK_DOMAIN.rstrip('/')}/{WEBHOOK_URL_PATH.lstrip('/')}"
+        logger.info(f"Starting bot in webhook mode")
+        logger.info(f"Webhook URL: {webhook_full_url}")
+        logger.info(f"Listening on {WEBHOOK_LISTEN_IP}:{WEBHOOK_PORT}")
+        
+        # Run webhook - this handles initialization internally
+        application.run_webhook(
+            listen=WEBHOOK_LISTEN_IP,
+            port=WEBHOOK_PORT,
+            url_path=WEBHOOK_URL_PATH,
+            webhook_url=webhook_full_url,
+            allowed_updates=Update.ALL_TYPES
+        )
+    else:
+        # Polling mode - use async approach
+        asyncio.run(main())
+
 if __name__ == "__main__":
     try:
-        asyncio.run(main())
+        if WEBHOOK_DOMAIN:
+            # Webhook mode uses synchronous approach
+            main_sync()
+        else:
+            # Polling mode uses async approach
+            asyncio.run(main())
     except KeyboardInterrupt:
         logger.info("Bot stopped by user.")
     except Exception as e:
