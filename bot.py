@@ -1,8 +1,8 @@
 import os
 import logging
 import asyncio
-import signal
-import sys
+import json
+from aiohttp import web, ClientSession
 from telegram import Update
 from telegram.ext import ApplicationBuilder, ContextTypes, MessageHandler, CommandHandler, filters
 from openai import OpenAI
@@ -166,13 +166,13 @@ Be concise and helpful.
     
     try:
         completion = client.chat.completions.create(
-            model="gpt-4o-mini",  # Fixed model name
+            model="gpt-4o-mini",
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_message},
             ],
             temperature=0.2,
-            max_tokens=1000  # Prevent overly long responses
+            max_tokens=1000
         )
         response_text = completion.choices[0].message.content.strip()
         logger.info(f"LLM processed message: '{user_message[:50]}...' -> Response type: {response_text[:50] if len(response_text) > 50 else response_text}")
@@ -253,20 +253,47 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> N
     """Log errors caused by updates."""
     logger.error(f"Exception while handling an update: {context.error}")
 
-async def shutdown_handler(signum, frame):
-    """Handle shutdown signals."""
-    logger.info(f"Received signal {signum}. Shutting down gracefully...")
-    global application
-    if application:
-        try:
-            await application.stop()
-            await application.shutdown()
-        except Exception as e:
-            logger.error(f"Error during shutdown: {e}")
-    sys.exit(0)
+# Webhook handler
+async def webhook_handler(request):
+    """Handle incoming webhook requests."""
+    try:
+        # Get the JSON data from the request
+        data = await request.json()
+        
+        # Create Update object from the webhook data
+        update = Update.de_json(data, application.bot)
+        
+        if update:
+            # Process the update through the application
+            await application.process_update(update)
+        
+        return web.Response(status=200)
+    except Exception as e:
+        logger.error(f"Error processing webhook: {e}")
+        return web.Response(status=500)
+
+async def health_check(request):
+    """Health check endpoint."""
+    return web.Response(text="OK", status=200)
+
+async def setup_webhook():
+    """Set up the webhook with Telegram."""
+    if not WEBHOOK_DOMAIN:
+        return
+        
+    webhook_url = f"https://{WEBHOOK_DOMAIN.rstrip('/')}/{WEBHOOK_URL_PATH.lstrip('/')}"
+    
+    try:
+        await application.bot.set_webhook(
+            url=webhook_url,
+            allowed_updates=Update.ALL_TYPES
+        )
+        logger.info(f"Webhook set successfully: {webhook_url}")
+    except Exception as e:
+        logger.error(f"Failed to set webhook: {e}")
 
 async def main():
-    """Configures and starts the bot with webhook or polling."""
+    """Main function to start the bot."""
     global application
     
     # Validate required environment variables
@@ -282,6 +309,7 @@ async def main():
     if not ADVISOR_USER_IDS:
         logger.warning("No advisor user IDs configured. Bot commands will not work.")
 
+    # Create application
     application = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
 
     # Add handlers
@@ -291,39 +319,48 @@ async def main():
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     application.add_error_handler(error_handler)
 
+    # Initialize application
+    await application.initialize()
+    await application.start()
+
     if WEBHOOK_DOMAIN:
         # Webhook mode
-        webhook_full_url = f"{WEBHOOK_DOMAIN.rstrip('/')}/{WEBHOOK_URL_PATH.lstrip('/')}"
         logger.info(f"Starting bot in webhook mode")
-        logger.info(f"Webhook URL: {webhook_full_url}")
+        logger.info(f"Webhook URL: https://{WEBHOOK_DOMAIN}/{WEBHOOK_URL_PATH}")
         logger.info(f"Listening on {WEBHOOK_LISTEN_IP}:{WEBHOOK_PORT}")
         
-        # Initialize and start the application
-        await application.initialize()
-        await application.start()
+        # Set up webhook
+        await setup_webhook()
         
-        # Set webhook
-        await application.bot.set_webhook(
-            url=webhook_full_url,
-            allowed_updates=Update.ALL_TYPES,
-        )
+        # Create web application
+        app = web.Application()
+        app.router.add_post(f"/{WEBHOOK_URL_PATH}", webhook_handler)
+        app.router.add_get("/health", health_check)
         
-        logger.info("Bot started successfully in webhook mode")
+        # Start web server
+        runner = web.AppRunner(app)
+        await runner.setup()
         
-        # Run webhook - this method handles the event loop properly
-        application.run_webhook(
-            listen=WEBHOOK_LISTEN_IP,
-            port=WEBHOOK_PORT,
-            url_path=WEBHOOK_URL_PATH,
-            webhook_url=webhook_full_url
-        )
+        site = web.TCPSite(runner, WEBHOOK_LISTEN_IP, WEBHOOK_PORT)
+        await site.start()
+        
+        logger.info("Webhook server started successfully")
+        
+        # Keep the server running
+        try:
+            while True:
+                await asyncio.sleep(3600)  # Sleep for 1 hour, then check again
+        except KeyboardInterrupt:
+            logger.info("Received shutdown signal...")
+        finally:
+            await runner.cleanup()
+            await application.stop()
+            await application.shutdown()
     else:
         # Polling mode
         logger.info("Starting bot in polling mode...")
         
         try:
-            await application.initialize()
-            await application.start()
             logger.info("Bot is running in polling mode. Send /start to activate.")
             
             # Start polling
@@ -333,7 +370,7 @@ async def main():
             try:
                 while True:
                     await asyncio.sleep(1)
-            except (KeyboardInterrupt, SystemExit):
+            except KeyboardInterrupt:
                 logger.info("Received shutdown signal...")
         except Exception as e:
             logger.error(f"Error in polling mode: {e}")
@@ -344,61 +381,12 @@ async def main():
             await application.shutdown()
             logger.info("Bot shut down gracefully.")
 
-def main_sync():
-    """Synchronous wrapper for the main function to handle webhook mode properly."""
-    global application
-    
-    # Validate required environment variables
-    if not TELEGRAM_TOKEN:
-        logger.error("TELEGRAM_BOT_TOKEN not set. Exiting.")
-        return
-    if not OPENAI_API_KEY:
-        logger.error("OPENAI_API_KEY not set. Exiting.")
-        return
-    if not FAQ_CONTENT: 
-        logger.error("FAQ content is missing. Bot's primary function is impaired. Check faq.md.")
-        return
-    if not ADVISOR_USER_IDS:
-        logger.warning("No advisor user IDs configured. Bot commands will not work.")
-
-    application = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
-
-    # Add handlers
-    application.add_handler(CommandHandler("start", start_command))
-    application.add_handler(CommandHandler("stop", stop_command))
-    application.add_handler(CommandHandler("status", status_command))
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-    application.add_error_handler(error_handler)
-
-    if WEBHOOK_DOMAIN:
-        # Webhook mode - use synchronous approach
-        webhook_full_url = f"{WEBHOOK_DOMAIN.rstrip('/')}/{WEBHOOK_URL_PATH.lstrip('/')}"
-        logger.info(f"Starting bot in webhook mode")
-        logger.info(f"Webhook URL: {webhook_full_url}")
-        logger.info(f"Listening on {WEBHOOK_LISTEN_IP}:{WEBHOOK_PORT}")
-        
-        # Run webhook - this handles initialization internally
-        application.run_webhook(
-            listen=WEBHOOK_LISTEN_IP,
-            port=WEBHOOK_PORT,
-            url_path=WEBHOOK_URL_PATH,
-            webhook_url=webhook_full_url,
-            allowed_updates=Update.ALL_TYPES
-        )
-    else:
-        # Polling mode - use async approach
-        asyncio.run(main())
-
 if __name__ == "__main__":
     try:
-        if WEBHOOK_DOMAIN:
-            # Webhook mode uses synchronous approach
-            main_sync()
-        else:
-            # Polling mode uses async approach
-            asyncio.run(main())
+        asyncio.run(main())
     except KeyboardInterrupt:
         logger.info("Bot stopped by user.")
     except Exception as e:
         logger.error(f"Fatal error: {e}")
+        import sys
         sys.exit(1)
