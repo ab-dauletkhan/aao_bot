@@ -58,27 +58,36 @@ CANNOT_ANSWER_MARKER = "[CANNOT_ANSWER]"
 BOT_IS_ACTIVE = False
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handles the /start command."""
-    if update.effective_user and update.effective_user.id in ADVISOR_USER_IDS:
-        logger.info(f"/start command from advisor {update.effective_user.id} in chat {update.effective_chat.id}. Not replying to advisor.")
+    """Handles the /start command. Only advisors can use this command."""
+    user_id = update.effective_user.id if update.effective_user else None
+    chat_id = update.effective_chat.id
+
+    if not user_id or user_id not in ADVISOR_USER_IDS:
+        logger.info(f"User {user_id} (not an advisor) in chat {chat_id} attempted to use /start. Denied.")
+        await update.message.reply_text("Sorry, the /start command is only available to advisors.")
         return
+
+    # User is an advisor, proceed to change state
     global BOT_IS_ACTIVE
     BOT_IS_ACTIVE = True
-    await update.message.reply_text("Hello! I'm now active and ready to help with FAQs. Send your questions!")
-    logger.info(f"/start command received. Bot is now active in chat {update.effective_chat.id}.")
+    logger.info(f"/start command executed by advisor {user_id}. Bot is now active in chat {chat_id}. No reply sent to advisor.")
+    # No direct reply to advisor, just log and change state
 
 async def stop_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handles the /stop command."""
-    if update.effective_user and update.effective_user.id in ADVISOR_USER_IDS:
-        logger.info(f"/stop command from advisor {update.effective_user.id} in chat {update.effective_chat.id}. Not replying to advisor.")
-        global BOT_IS_ACTIVE 
-        BOT_IS_ACTIVE = False
-        logger.info(f"/stop command executed by advisor. Bot is now inactive in chat {update.effective_chat.id}.")
+    """Handles the /stop command. Only advisors can use this command."""
+    user_id = update.effective_user.id if update.effective_user else None
+    chat_id = update.effective_chat.id
+
+    if not user_id or user_id not in ADVISOR_USER_IDS:
+        logger.info(f"User {user_id} (not an advisor) in chat {chat_id} attempted to use /stop. Denied.")
+        await update.message.reply_text("Sorry, the /stop command is only available to advisors.")
         return
+
+    # User is an advisor, proceed to change state
     global BOT_IS_ACTIVE
     BOT_IS_ACTIVE = False
-    await update.message.reply_text("I've been stopped. I will ignore messages until you send /start.")
-    logger.info(f"/stop command received. Bot is now inactive in chat {update.effective_chat.id}.")
+    logger.info(f"/stop command executed by advisor {user_id}. Bot is now inactive in chat {chat_id}. No reply sent to advisor.")
+    # No direct reply to advisor, just log and change state
 
 def get_llm_response(user_message: str) -> str:
     """
@@ -123,13 +132,22 @@ Be concise and helpful.
     except Exception as e:
         logger.error(f"Error calling OpenAI: {e}")
         return CANNOT_ANSWER_MARKER 
+
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handles incoming text messages."""
+    # Advisor check is the very first thing
     if update.effective_user and update.effective_user.id in ADVISOR_USER_IDS:
         logger.info(f"Message from advisor {update.effective_user.id} in chat {update.effective_chat.id}. Ignoring.")
         return
-    global BOT_IS_ACTIVE
-    if not BOT_IS_ACTIVE:
+
+    # Python treats BOT_IS_ACTIVE as local if assigned to in this scope, 
+    # but here we only READ it. So, `global` keyword is not strictly necessary
+    # for reading if there's no assignment to BOT_IS_ACTIVE in this function.
+    # However, for clarity and consistency, especially if one might add an assignment later,
+    # explicitly declaring `global BOT_IS_ACTIVE` can be good practice even for reads.
+    # For now, PTB examples often omit it if only reading and it's clear from context.
+    # Let's rely on Python's scope rules: it will find BOT_IS_ACTIVE in the global scope if not local.
+    if not BOT_IS_ACTIVE: # Reading global state
         if update.message.text and not update.message.text.startswith('/'):
             logger.info(f"Bot is not active. Ignoring message in chat {update.effective_chat.id}.")
         return
