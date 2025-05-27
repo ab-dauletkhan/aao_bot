@@ -1,6 +1,8 @@
 import os
 import logging
-import asyncio # Added for set_webhook
+import asyncio
+import signal
+import sys
 from telegram import Update
 from telegram.ext import ApplicationBuilder, ContextTypes, MessageHandler, CommandHandler, filters
 from openai import OpenAI
@@ -20,6 +22,7 @@ MODERATOR_CHAT_ID = os.getenv("MODERATOR_CHAT_ID")
 ADVISOR_TAG = os.getenv("ADVISOR_TAG", "@advisors")
 ADVISOR_USER_IDS_STR = os.getenv("ADVISOR_USER_IDS", "")
 ADVISOR_USER_IDS = set()
+
 if ADVISOR_USER_IDS_STR:
     try:
         ADVISOR_USER_IDS = set(map(int, ADVISOR_USER_IDS_STR.split(',')))
@@ -34,7 +37,7 @@ WEBHOOK_URL_PATH = os.getenv("WEBHOOK_URL_PATH", TELEGRAM_TOKEN)
 WEBHOOK_DOMAIN = os.getenv("WEBHOOK_DOMAIN")
 
 # Initialize OpenAI client
-client = OpenAI(api_key=OPENAI_API_KEY)
+client = OpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
 
 # Load raw FAQ content at startup
 FAQ_CONTENT = ""
@@ -54,40 +57,77 @@ except Exception as e:
 NOT_A_QUESTION_MARKER = "[NOT_A_QUESTION]"
 CANNOT_ANSWER_MARKER = "[CANNOT_ANSWER]"
 
-# State variable to control bot's activity
+# State variables
 BOT_IS_ACTIVE = False
+application = None  # Global reference for cleanup
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handles the /start command. Only advisors can use this command."""
-    user_id = update.effective_user.id if update.effective_user else None
-    chat_id = update.effective_chat.id
+    if not update.effective_user:
+        logger.warning("Received /start command with no effective user")
+        return
+        
+    user_id = update.effective_user.id
+    chat_id = update.effective_chat.id if update.effective_chat else "unknown"
 
-    if not user_id or user_id not in ADVISOR_USER_IDS:
-        logger.info(f"User {user_id} (not an advisor) in chat {chat_id} attempted to use /start. Denied.")
+    if user_id not in ADVISOR_USER_IDS:
+        logger.info(f"Non-advisor user {user_id} in chat {chat_id} attempted to use /start. Denied.")
         await update.message.reply_text("Sorry, the /start command is only available to advisors.")
         return
 
-    # User is an advisor, proceed to change state
     global BOT_IS_ACTIVE
     BOT_IS_ACTIVE = True
-    logger.info(f"/start command executed by advisor {user_id}. Bot is now active in chat {chat_id}. No reply sent to advisor.")
-    # No direct reply to advisor, just log and change state
+    logger.info(f"/start command executed by advisor {user_id}. Bot is now active in chat {chat_id}.")
+    
+    # Send confirmation to advisor
+    await update.message.reply_text("✅ Bot is now active and will respond to student questions.")
 
 async def stop_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handles the /stop command. Only advisors can use this command."""
-    user_id = update.effective_user.id if update.effective_user else None
-    chat_id = update.effective_chat.id
+    if not update.effective_user:
+        logger.warning("Received /stop command with no effective user")
+        return
+        
+    user_id = update.effective_user.id
+    chat_id = update.effective_chat.id if update.effective_chat else "unknown"
 
-    if not user_id or user_id not in ADVISOR_USER_IDS:
-        logger.info(f"User {user_id} (not an advisor) in chat {chat_id} attempted to use /stop. Denied.")
+    if user_id not in ADVISOR_USER_IDS:
+        logger.info(f"Non-advisor user {user_id} in chat {chat_id} attempted to use /stop. Denied.")
         await update.message.reply_text("Sorry, the /stop command is only available to advisors.")
         return
 
-    # User is an advisor, proceed to change state
     global BOT_IS_ACTIVE
     BOT_IS_ACTIVE = False
-    logger.info(f"/stop command executed by advisor {user_id}. Bot is now inactive in chat {chat_id}. No reply sent to advisor.")
-    # No direct reply to advisor, just log and change state
+    logger.info(f"/stop command executed by advisor {user_id}. Bot is now inactive in chat {chat_id}.")
+    
+    # Send confirmation to advisor
+    await update.message.reply_text("⏹️ Bot is now inactive and will not respond to student questions.")
+
+async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Shows the current bot status. Only available to advisors."""
+    if not update.effective_user:
+        logger.warning("Received /status command with no effective user")
+        return
+        
+    user_id = update.effective_user.id
+
+    if user_id not in ADVISOR_USER_IDS:
+        await update.message.reply_text("Sorry, the /status command is only available to advisors.")
+        return
+
+    status = "🟢 Active" if BOT_IS_ACTIVE else "🔴 Inactive"
+    faq_status = "✅ Loaded" if FAQ_CONTENT else "❌ Not loaded"
+    openai_status = "✅ Connected" if client else "❌ Not connected"
+    
+    status_message = f"""
+📊 **Bot Status**
+Status: {status}
+FAQ: {faq_status}
+OpenAI: {openai_status}
+Advisors: {len(ADVISOR_USER_IDS)} configured
+    """
+    
+    await update.message.reply_text(status_message, parse_mode='Markdown')
 
 def get_llm_response(user_message: str) -> str:
     """
@@ -97,37 +137,45 @@ def get_llm_response(user_message: str) -> str:
     3. If not a question, return NOT_A_QUESTION_MARKER.
     4. If it's a question but cannot be answered from FAQ_CONTENT, return CANNOT_ANSWER_MARKER.
     """
+    if not client:
+        logger.error("OpenAI client not initialized. Check OPENAI_API_KEY.")
+        return CANNOT_ANSWER_MARKER
+        
     if not FAQ_CONTENT: 
         logger.warning("FAQ_CONTENT is not available. Returning CANNOT_ANSWER_MARKER.")
         return CANNOT_ANSWER_MARKER
+        
     system_prompt = f"""You are a helpful AI assistant for students. Your knowledge base consists ONLY of the following text:
+
 --- BEGIN FAQ KNOWLEDGE BASE ---
 {FAQ_CONTENT}
 --- END FAQ KNOWLEDGE BASE ---
 
 Your tasks are:
-1.  Analyze the user's message.
-2.  First, determine if the user's message is a question seeking information OR if it's just a statement, greeting, chit-chat, or something that doesn't require an answer from the FAQ.
-    *   If the message is NOT a question or does not require an answer from the FAQ (e.g., "hello", "thanks", "ok", "good morning", "lol that's funny"), respond with the exact string: {NOT_A_QUESTION_MARKER}
-3.  If the message IS a question:
-    *   Try to answer it comprehensively using ONLY the information from the FAQ KNOWLEDGE BASE provided above.
-    *   If you can find a relevant answer in the FAQ KNOWLEDGE BASE, provide the answer directly. Do not refer to "the FAQ" in your answer, just provide the information as if you know it.
-    *   If the message is a question, but you cannot find an answer within the FAQ KNOWLEDGE BASE, respond with the exact string: {CANNOT_ANSWER_MARKER}
+1. Analyze the user's message.
+2. First, determine if the user's message is a question seeking information OR if it's just a statement, greeting, chit-chat, or something that doesn't require an answer from the FAQ.
+   * If the message is NOT a question or does not require an answer from the FAQ (e.g., "hello", "thanks", "ok", "good morning", "lol that's funny"), respond with the exact string: {NOT_A_QUESTION_MARKER}
+3. If the message IS a question:
+   * Try to answer it comprehensively using ONLY the information from the FAQ KNOWLEDGE BASE provided above.
+   * If you can find a relevant answer in the FAQ KNOWLEDGE BASE, provide the answer directly. Do not refer to "the FAQ" in your answer, just provide the information as if you know it.
+   * If the message is a question, but you cannot find an answer within the FAQ KNOWLEDGE BASE, respond with the exact string: {CANNOT_ANSWER_MARKER}
 
 Do not use any external knowledge or information not present in the FAQ KNOWLEDGE BASE.
 Be concise and helpful.
 """
+    
     try:
         completion = client.chat.completions.create(
-            model="gpt-4.1-mini-2025-04-14",
+            model="gpt-4o-mini",  # Fixed model name
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_message},
             ],
-            temperature=0.2, 
+            temperature=0.2,
+            max_tokens=1000  # Prevent overly long responses
         )
         response_text = completion.choices[0].message.content.strip()
-        logger.info(f"LLM raw response for user message '{user_message}': '{response_text}'")
+        logger.info(f"LLM processed message: '{user_message[:50]}...' -> Response type: {response_text[:50] if len(response_text) > 50 else response_text}")
         return response_text
     except Exception as e:
         logger.error(f"Error calling OpenAI: {e}")
@@ -135,53 +183,90 @@ Be concise and helpful.
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handles incoming text messages."""
+    # Safety checks
+    if not update.message or not update.message.text:
+        return
+        
     # Advisor check is the very first thing
     if update.effective_user and update.effective_user.id in ADVISOR_USER_IDS:
-        logger.info(f"Message from advisor {update.effective_user.id} in chat {update.effective_chat.id}. Ignoring.")
+        logger.info(f"Message from advisor {update.effective_user.id} ignored.")
         return
 
-    # Python treats BOT_IS_ACTIVE as local if assigned to in this scope, 
-    # but here we only READ it. So, `global` keyword is not strictly necessary
-    # for reading if there's no assignment to BOT_IS_ACTIVE in this function.
-    # However, for clarity and consistency, especially if one might add an assignment later,
-    # explicitly declaring `global BOT_IS_ACTIVE` can be good practice even for reads.
-    # For now, PTB examples often omit it if only reading and it's clear from context.
-    # Let's rely on Python's scope rules: it will find BOT_IS_ACTIVE in the global scope if not local.
-    if not BOT_IS_ACTIVE: # Reading global state
-        if update.message.text and not update.message.text.startswith('/'):
-            logger.info(f"Bot is not active. Ignoring message in chat {update.effective_chat.id}.")
+    # Check if bot is active
+    if not BOT_IS_ACTIVE:
+        logger.info(f"Bot is inactive. Ignoring message in chat {update.effective_chat.id if update.effective_chat else 'unknown'}.")
         return
-    user_message = update.message.text
+        
+    user_message = update.message.text.strip()
     chat_id = update.message.chat_id
-    if not user_message or user_message.startswith("/"):
-        if not user_message:
-            logger.info("Ignoring empty message.")
+    
+    # Skip commands
+    if user_message.startswith("/"):
         return
-    llm_answer = get_llm_response(user_message)
-    if llm_answer == NOT_A_QUESTION_MARKER:
-        logger.info(f"Message '{user_message}' identified as not a question. Skipping.")
+        
+    # Skip empty messages
+    if not user_message:
+        logger.info("Ignoring empty message.")
         return
-    elif llm_answer == CANNOT_ANSWER_MARKER or not llm_answer: 
-        logger.info(f"LLM indicated it cannot answer or returned empty for: '{user_message}'. Notifying advisors.")
-        reply_text = f"I'm not sure how to answer that. {ADVISOR_TAG}, could you please help?"
-        if MODERATOR_CHAT_ID:
-            try:
-                moderator_message = (
-                    f"❓ Student question in chat {update.message.chat.title or chat_id} "
-                    f"(message link: {update.message.link}):\n"
-                    f"{user_message}\n\n"
-                    f"🤖 Bot couldn't find an answer in the FAQ or failed to process."
-                )
-                await context.bot.send_message(chat_id=MODERATOR_CHAT_ID, text=moderator_message)
-            except Exception as e:
-                logger.error(f"Failed to send message to moderator chat {MODERATOR_CHAT_ID}: {e}")
-        await update.message.reply_text(reply_text)
-    else:
-        logger.info(f"LLM provided answer for: '{user_message}'. Replying.")
-        await update.message.reply_text(llm_answer)
 
-async def main(): # Changed to async to use await for set_webhook
+    try:
+        llm_answer = get_llm_response(user_message)
+        
+        if llm_answer == NOT_A_QUESTION_MARKER:
+            logger.info(f"Message identified as not a question: '{user_message[:50]}...'")
+            return
+        elif llm_answer == CANNOT_ANSWER_MARKER or not llm_answer: 
+            logger.info(f"Cannot answer question: '{user_message[:50]}...'")
+            reply_text = f"I'm not sure how to answer that. {ADVISOR_TAG}, could you please help?"
+            
+            # Notify moderator if configured
+            if MODERATOR_CHAT_ID:
+                try:
+                    chat_title = update.message.chat.title if update.message.chat else f"Chat {chat_id}"
+                    message_link = f"https://t.me/c/{str(chat_id)[4:] if str(chat_id).startswith('-100') else chat_id}/{update.message.message_id}"
+                    
+                    moderator_message = (
+                        f"❓ **Student Question Alert**\n"
+                        f"**Chat:** {chat_title}\n"
+                        f"**Question:** {user_message}\n"
+                        f"**Reason:** Bot couldn't find answer in FAQ\n"
+                        f"**Link:** {message_link}"
+                    )
+                    await context.bot.send_message(
+                        chat_id=MODERATOR_CHAT_ID, 
+                        text=moderator_message,
+                        parse_mode='Markdown'
+                    )
+                except Exception as e:
+                    logger.error(f"Failed to send message to moderator chat {MODERATOR_CHAT_ID}: {e}")
+            
+            await update.message.reply_text(reply_text)
+        else:
+            logger.info(f"Answered question: '{user_message[:50]}...'")
+            await update.message.reply_text(llm_answer)
+            
+    except Exception as e:
+        logger.error(f"Error handling message '{user_message[:50]}...': {e}")
+        await update.message.reply_text("Sorry, I encountered an error processing your message. Please try again later.")
+
+async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Log errors caused by updates."""
+    logger.error(f"Exception while handling an update: {context.error}")
+
+async def shutdown_handler(signum, frame):
+    """Handle shutdown signals."""
+    logger.info(f"Received signal {signum}. Shutting down gracefully...")
+    global application
+    if application:
+        await application.stop()
+        await application.shutdown()
+    sys.exit(0)
+
+async def main():
     """Configures and starts the bot with webhook or polling."""
+    global application
+    
+    # Validate required environment variables
     if not TELEGRAM_TOKEN:
         logger.error("TELEGRAM_BOT_TOKEN not set. Exiting.")
         return
@@ -190,45 +275,80 @@ async def main(): # Changed to async to use await for set_webhook
         return
     if not FAQ_CONTENT: 
         logger.error("FAQ content is missing. Bot's primary function is impaired. Check faq.md.")
-    if not ADVISOR_USER_IDS_STR:
-        logger.warning("ADVISOR_USER_IDS not set. Bot will not ignore advisor messages.")
-    elif not ADVISOR_USER_IDS:
-        logger.warning("ADVISOR_USER_IDS failed to parse. Advisors will not be ignored.")
+        return
+    if not ADVISOR_USER_IDS:
+        logger.warning("No advisor user IDs configured. Bot commands will not work.")
+
+    # Setup signal handlers for graceful shutdown
+    for sig in [signal.SIGINT, signal.SIGTERM]:
+        signal.signal(sig, lambda s, f: asyncio.create_task(shutdown_handler(s, f)))
 
     application = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
 
+    # Add handlers
     application.add_handler(CommandHandler("start", start_command))
     application.add_handler(CommandHandler("stop", stop_command))
+    application.add_handler(CommandHandler("status", status_command))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    application.add_error_handler(error_handler)
 
-    if WEBHOOK_DOMAIN: # If WEBHOOK_DOMAIN is set, run in webhook mode
+    if WEBHOOK_DOMAIN:
+        # Webhook mode
         webhook_full_url = f"{WEBHOOK_DOMAIN.rstrip('/')}/{WEBHOOK_URL_PATH.lstrip('/')}"
-        logger.info(f"Setting webhook to: {webhook_full_url}")
-        logger.info(f"Bot will listen on {WEBHOOK_LISTEN_IP}:{WEBHOOK_PORT} at path /{WEBHOOK_URL_PATH.lstrip('/')}")
+        logger.info(f"Starting bot in webhook mode")
+        logger.info(f"Webhook URL: {webhook_full_url}")
+        logger.info(f"Listening on {WEBHOOK_LISTEN_IP}:{WEBHOOK_PORT}")
         
-        await application.bot.set_webhook(
-            url=webhook_full_url,
-            allowed_updates=Update.ALL_TYPES, # Or specify more granularly like [Update.MESSAGE, Update.CALLBACK_QUERY]
-            # drop_pending_updates=True # Optional: drop updates that accumulated while bot was offline
-        )
+        try:
+            await application.initialize()
+            await application.bot.set_webhook(
+                url=webhook_full_url,
+                allowed_updates=Update.ALL_TYPES,
+            )
+            await application.start()
+            
+            # Start webhook server (this is blocking)
+            application.run_webhook(
+                listen=WEBHOOK_LISTEN_IP,
+                port=WEBHOOK_PORT,
+                url_path=WEBHOOK_URL_PATH
+            )
+        except Exception as e:
+            logger.error(f"Error starting webhook: {e}")
+            await application.stop()
+            await application.shutdown()
+    else:
+        # Polling mode
+        logger.info("Starting bot in polling mode...")
         
-        # The PTB library's run_webhook starts its own web server (e.g. aiohttp based)
-        # It needs to be run within an asyncio event loop, which ApplicationBuilder handles if main is async
-        application.run_webhook(
-            listen=WEBHOOK_LISTEN_IP,
-            port=WEBHOOK_PORT,
-            url_path=WEBHOOK_URL_PATH # This should be just the path part, not the full URL
-        )
-        logger.info(f"Bot started in webhook mode. Listening on {WEBHOOK_LISTEN_IP}:{WEBHOOK_PORT}")
-    else: # Fallback to polling if WEBHOOK_DOMAIN is not set
-        logger.info("WEBHOOK_DOMAIN not set. Starting bot in polling mode...")
-        logger.info("Bot is starting... Send /start to activate.")
-        application.run_polling(allowed_updates=Update.ALL_TYPES)
-        logger.info("Bot has stopped polling.")
+        try:
+            await application.initialize()
+            await application.start()
+            logger.info("Bot is running in polling mode. Send /start to activate.")
+            
+            # Start polling
+            await application.updater.start_polling(drop_pending_updates=True)
+            
+            # Keep running until interrupted
+            try:
+                while True:
+                    await asyncio.sleep(1)
+            except (KeyboardInterrupt, SystemExit):
+                logger.info("Received shutdown signal...")
+        except Exception as e:
+            logger.error(f"Error in polling mode: {e}")
+        finally:
+            logger.info("Shutting down bot...")
+            await application.updater.stop()
+            await application.stop()
+            await application.shutdown()
+            logger.info("Bot shut down gracefully.")
 
 if __name__ == "__main__":
-    # For run_webhook to work correctly with ApplicationBuilder, main needs to be run in an event loop
-    # If main is async, ApplicationBuilder().token().build() handles this.
-    # If there were issues, one might need to explicitly use asyncio.run(main())
-    # However, PTB's Application structure usually manages the loop when run_webhook or run_polling is called.
-    asyncio.run(main()) # Ensure main runs in an event loop
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        logger.info("Bot stopped by user.")
+    except Exception as e:
+        logger.error(f"Fatal error: {e}")
+        sys.exit(1)
