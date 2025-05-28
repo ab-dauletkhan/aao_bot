@@ -471,7 +471,7 @@ async def handle_reaction_downvote(update: Update, context: ContextTypes.DEFAULT
     
     if reaction.new_reaction:
         for rtype in reaction.new_reaction:
-            if isinstance(rtype, ReactionTypeEmoji) and rtype.emoji == downvote_emoji:
+            if hasattr(rtype, 'emoji') and rtype.emoji == downvote_emoji:
                 is_new_downvote = True
                 break
     
@@ -575,7 +575,7 @@ async def main():
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     
     logger.debug("Registering reaction handler")
-    application.add_handler(MessageReactionHandler(handle_reaction_downvote))
+    application.add_handler(MessageReactionHandler(handle_reaction_downvote, MessageReactionHandler.MESSAGE_REACTION))
     
     logger.debug("Registering error handler")
     application.add_error_handler(error_handler)
