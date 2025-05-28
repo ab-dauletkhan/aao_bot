@@ -279,12 +279,20 @@ def get_llm_response(user_message: str, user_id: int = None, chat_id: int = None
         logger.warning("✗ FAQ_CONTENT not available")
         return CANNOT_ANSWER_MARKER
         
-    system_prompt = f"""Your tasks:
-1. Analyze the user's message
-2. If NOT a question, respond with: {NOT_A_QUESTION_MARKER}
-3. If question but can't answer from FAQ, respond with: {CANNOT_ANSWER_MARKER}
-4. Otherwise, provide answer using ONLY this FAQ:
+    system_prompt = f"""You are a helpful AI assistant for students. Your knowledge is limited to the following FAQ:
+
+--- BEGIN FAQ ---
 {FAQ_CONTENT}
+--- END FAQ ---
+
+Instructions:
+1. If the user's message is not a question (e.g., greetings, statements), respond with: {NOT_A_QUESTION_MARKER}
+2. If the message is a question:
+   - Answer it comprehensively using only the information from the FAQ above, combining relevant parts if necessary.
+   - Do not mention the FAQ in your answer.
+   - If the question cannot be answered with the FAQ, respond with: {CANNOT_ANSWER_MARKER}
+
+Ensure your response is in valid Markdown format, with proper syntax for *, _, `, [], and (). Be concise and helpful.
 """
     
     try:
