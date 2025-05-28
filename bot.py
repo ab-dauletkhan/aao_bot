@@ -615,3 +615,6 @@ async def main():
             logger.info("Cleaning up webhook server...")
             await runner.cleanup()
             await application.stop()
+
+if __name__ == "__main__":
+    asyncio.run(main())
