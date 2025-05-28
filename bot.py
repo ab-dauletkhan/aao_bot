@@ -1,42 +1,70 @@
+from loguru import logger
 import os
 import sys
-import logging
 import asyncio
 import json
 import time
 from datetime import datetime
 from aiohttp import web
 from telegram import Update, ReactionTypeEmoji
-from telegram.ext import ApplicationBuilder, ContextTypes, MessageHandler, CommandHandler, filters, MessageReactionHandler
+from telegram.ext import (
+    ApplicationBuilder,
+    ContextTypes,
+    MessageHandler,
+    CommandHandler,
+    filters,
+    MessageReactionHandler,
+)
 from telegram.constants import ChatAction
 from openai import OpenAI
-from openai.types.chat import ChatCompletionUserMessageParam, ChatCompletionSystemMessageParam
+from openai.types.chat import (
+    ChatCompletionUserMessageParam,
+    ChatCompletionSystemMessageParam,
+)
 from dotenv import load_dotenv
-from typing import List, Union
+from typing import List, Union, Dict, Any
 
-def setup_logging():
-    """Set up logging that outputs everything to stdout."""
-    formatter = logging.Formatter(
-        '%(asctime)s - %(name)s - %(levelname)s - [%(filename)s:%(lineno)d] - %(funcName)s() - %(message)s'
+
+def setup_logging() -> None:
+    """Set up loguru with rotation and JSON serialization."""
+    # Remove default handler
+    logger.remove()
+
+    # Add console handler with colorized output
+    logger.add(
+        sys.stdout,
+        level="DEBUG",
+        format="{time:YYYY-MM-DD HH:mm:ss} | {level: <8} | {name}:{line} - {message}",
+        colorize=True,
     )
 
-    root_logger = logging.getLogger()
-    root_logger.setLevel(logging.DEBUG)
-    root_logger.handlers.clear()
+    # Add file handler with rotation
+    logger.add(
+        "logs/bot_{time:YYYY-MM-DD}.log",
+        rotation="1 day",
+        retention="7 days",
+        level="DEBUG",
+        compression="zip",
+        serialize=False,
+        format="{time:YYYY-MM-DD HH:mm:ss} | {level: <8} | {name}:{line} - {message}",
+    )
 
-    handler = logging.StreamHandler(sys.stdout)
-    handler.setLevel(logging.DEBUG)
-    handler.setFormatter(formatter)
+    # Add JSON handler for structured logging
+    logger.add(
+        "logs/bot_structured_{time:YYYY-MM-DD}.json",
+        rotation="1 day",
+        retention="7 days",
+        level="INFO",
+        serialize=True,
+        format="{time:YYYY-MM-DD HH:mm:ss} | {level: <8} | {name}:{line} - {message}",
+    )
 
-    root_logger.addHandler(handler)
-
-    return logging.getLogger(__name__)
 
 # Initialize logging
-logger = setup_logging()
+setup_logging()
 
 load_dotenv()
-logger.info("=== Bot Starting Up ===")
+logger.info("=== Bot Starting Up ===", extra={"phase": "startup"})
 logger.debug("Loading environment variables...")
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
@@ -46,17 +74,28 @@ ADVISOR_USER_IDS_STR = os.getenv("ADVISOR_USER_IDS", "")
 ADVISOR_USER_IDS = set()
 
 # Log environment variable status
-logger.debug(f"TELEGRAM_TOKEN: {'✓ Set' if TELEGRAM_TOKEN else '✗ Missing'}")
-logger.debug(f"OPENAI_API_KEY: {'✓ Set' if OPENAI_API_KEY else '✗ Missing'}")
-logger.debug(f"MODERATOR_CHAT_ID: {'✓ Set' if MODERATOR_CHAT_ID else '✗ Missing'}")
-logger.debug(f"ADVISOR_USER_IDS_STR: {ADVISOR_USER_IDS_STR}")
+logger.debug(
+    "Environment variables status",
+    extra={
+        "TELEGRAM_TOKEN": "✓ Set" if TELEGRAM_TOKEN else "✗ Missing",
+        "OPENAI_API_KEY": "✓ Set" if OPENAI_API_KEY else "✗ Missing",
+        "MODERATOR_CHAT_ID": "✓ Set" if MODERATOR_CHAT_ID else "✗ Missing",
+        "ADVISOR_USER_IDS_STR": ADVISOR_USER_IDS_STR,
+    },
+)
 
 if ADVISOR_USER_IDS_STR:
     try:
-        ADVISOR_USER_IDS = set(map(int, ADVISOR_USER_IDS_STR.split(',')))
-        logger.info(f"✓ Loaded {len(ADVISOR_USER_IDS)} advisor user IDs: {ADVISOR_USER_IDS}")
+        ADVISOR_USER_IDS = set(map(int, ADVISOR_USER_IDS_STR.split(",")))
+        logger.info(
+            "Loaded advisor user IDs",
+            extra={"count": len(ADVISOR_USER_IDS), "ids": list(ADVISOR_USER_IDS)},
+        )
     except ValueError as e:
-        logger.error(f"✗ Invalid format for ADVISOR_USER_IDS: {e}. Advisors will not be ignored.")
+        logger.error(
+            f"Invalid format for ADVISOR_USER_IDS: {e}", extra={"error": str(e)}
+        )
+        ADVISOR_USER_IDS = set()
 
 # Webhook settings
 WEBHOOK_LISTEN_IP = os.getenv("WEBHOOK_LISTEN_IP", "0.0.0.0")
@@ -64,195 +103,246 @@ WEBHOOK_PORT = int(os.getenv("PORT", os.getenv("WEBHOOK_PORT", "8443")))
 WEBHOOK_URL_PATH = os.getenv("WEBHOOK_URL_PATH", TELEGRAM_TOKEN or "")
 WEBHOOK_DOMAIN = os.getenv("WEBHOOK_DOMAIN")
 
-logger.debug(f"Webhook config - IP: {WEBHOOK_LISTEN_IP}, Port: {WEBHOOK_PORT}, Domain: {WEBHOOK_DOMAIN}")
+logger.debug(
+    "Webhook configuration",
+    extra={"ip": WEBHOOK_LISTEN_IP, "port": WEBHOOK_PORT, "domain": WEBHOOK_DOMAIN},
+)
 
 # Initialize OpenAI client
 try:
     client = OpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
-    if client:
-        logger.info("✓ OpenAI client initialized successfully")
-    else:
-        logger.warning("✗ OpenAI client not initialized - API key missing")
+    logger.info("OpenAI client status", extra={"initialized": bool(client)})
 except Exception as e:
-    logger.error(f"✗ Failed to initialize OpenAI client: {e}")
+    logger.exception("Failed to initialize OpenAI client", extra={"error": str(e)})
     client = None
 
 # Load FAQ content
 FAQ_CONTENT = ""
 try:
-    logger.debug("Attempting to load FAQ content from faq.md...")
+    logger.debug("Loading FAQ content...")
     with open("faq.md", "r", encoding="utf-8") as f:
         FAQ_CONTENT = f.read()
-    if FAQ_CONTENT:
-        logger.info(f"✓ Successfully loaded FAQ content from faq.md ({len(FAQ_CONTENT)} characters)")
-    else:
-        logger.warning("✗ faq.md is empty")
+    logger.info("FAQ content loaded", extra={"length": len(FAQ_CONTENT)})
 except FileNotFoundError:
-    logger.error("✗ faq.md not found")
+    logger.error("FAQ file not found")
 except Exception as e:
-    logger.error(f"✗ Error reading faq.md: {e}")
+    logger.exception("Error reading FAQ file", extra={"error": str(e)})
 
 # Special markers
 NOT_A_QUESTION_MARKER = "[NOT_A_QUESTION]"
 CANNOT_ANSWER_MARKER = "[CANNOT_ANSWER]"
 
-logger.debug(f"Special markers configured: NOT_A_QUESTION='{NOT_A_QUESTION_MARKER}', CANNOT_ANSWER='{CANNOT_ANSWER_MARKER}'")
+logger.debug(
+    "Special markers configured",
+    extra={
+        "not_a_question": NOT_A_QUESTION_MARKER,
+        "cannot_answer": CANNOT_ANSWER_MARKER,
+    },
+)
 
 # State variables
 BOT_IS_ACTIVE = True
 application = None
 
-def log_user_info(update: Update, action: str, additional_info: str = ""):
-    """Log user information consistently with enhanced details."""
+
+def log_user_info(
+    update: Update, action: str, additional_info: Dict[str, Any] = {}
+) -> Dict[str, Any]:
+    """Log user information with structured data."""
     user = update.effective_user
     chat = update.effective_chat
 
     user_info = {
-        'user_id': user.id if user else 'unknown',
-        'username': user.username if user else 'unknown',
-        'first_name': user.first_name if user else 'unknown',
-        'last_name': user.last_name if user else 'unknown',
-        'chat_id': chat.id if chat else 'unknown',
-        'chat_type': chat.type if chat else 'unknown',
-        'chat_title': getattr(chat, 'title', 'private') if chat else 'unknown',
-        'action': action,
-        'timestamp': datetime.now().isoformat(),
-        'additional_info': additional_info
+        "user_id": user.id if user else "unknown",
+        "username": user.username if user else "unknown",
+        "first_name": user.first_name if user else "unknown",
+        "last_name": user.last_name if user else "unknown",
+        "chat_id": chat.id if chat else "unknown",
+        "chat_type": chat.type if chat else "unknown",
+        "chat_title": getattr(chat, "title", "private") if chat else "unknown",
+        "action": action,
+        "timestamp": datetime.now().isoformat(),
     }
+    user_info.update(additional_info)
 
-    logger.info(f"USER_ACTION: {json.dumps(user_info, ensure_ascii=False)}")
+    logger.info("USER_ACTION", extra=user_info)
     return user_info
+
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handles the /start command for advisors only."""
     logger.debug("Processing /start command...")
 
     if not update.message or not update.effective_user:
-        logger.warning("✗ Received /start command with no message or user")
+        logger.warning(
+            "Invalid /start command", extra={"error": "Missing message or user"}
+        )
         return
 
     user_id = update.effective_user.id
 
     if user_id not in ADVISOR_USER_IDS:
-        logger.warning(f"✗ Non-advisor user {user_id} attempted to use /start")
-        log_user_info(update, "start_command_denied", "User not in advisor list")
-        await update.message.reply_text("Sorry, this command is only available to advisors.")
+        logger.warning("Non-advisor attempted /start", extra={"user_id": user_id})
+        log_user_info(update, "start_command_denied", {"reason": "Not in advisor list"})
+        await update.message.reply_text(
+            "Sorry, this command is only available to advisors."
+        )
         return
 
     global BOT_IS_ACTIVE
     old_status = BOT_IS_ACTIVE
     BOT_IS_ACTIVE = True
 
-    logger.info(f"✓ /start command executed by advisor {user_id}. Status: {old_status} -> {BOT_IS_ACTIVE}")
-    log_user_info(update, "start_command_success", f"Bot activated, previous_status={old_status}")
+    logger.info(
+        "/start command executed",
+        extra={
+            "user_id": user_id,
+            "old_status": old_status,
+            "new_status": BOT_IS_ACTIVE,
+        },
+    )
+    log_user_info(update, "start_command_success", {"previous_status": old_status})
 
-    await update.message.reply_text("✅ Bot is now active and will respond to student questions.")
+    await update.message.reply_text(
+        "✅ Bot is now active and will respond to student questions."
+    )
+
 
 async def stop_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handles the /stop command for advisors only."""
     logger.debug("Processing /stop command...")
 
     if not update.message or not update.effective_user:
-        logger.warning("✗ Received /stop command with no message or user")
+        logger.warning(
+            "Invalid /stop command", extra={"error": "Missing message or user"}
+        )
         return
 
     user_id = update.effective_user.id
 
     if user_id not in ADVISOR_USER_IDS:
-        logger.warning(f"✗ Non-advisor user {user_id} attempted to use /stop")
-        log_user_info(update, "stop_command_denied", "User not in advisor list")
-        await update.message.reply_text("Sorry, this command is only available to advisors.")
+        logger.warning("Non-advisor attempted /stop", extra={"user_id": user_id})
+        log_user_info(update, "stop_command_denied", {"reason": "Not in advisor list"})
+        await update.message.reply_text(
+            "Sorry, this command is only available to advisors."
+        )
         return
 
     global BOT_IS_ACTIVE
     old_status = BOT_IS_ACTIVE
     BOT_IS_ACTIVE = False
 
-    logger.info(f"✓ /stop command executed by advisor {user_id}. Status: {old_status} -> {BOT_IS_ACTIVE}")
-    log_user_info(update, "stop_command_success", f"Bot deactivated, previous_status={old_status}")
+    logger.info(
+        "/stop command executed",
+        extra={
+            "user_id": user_id,
+            "old_status": old_status,
+            "new_status": BOT_IS_ACTIVE,
+        },
+    )
+    log_user_info(update, "stop_command_success", {"previous_status": old_status})
 
-    await update.message.reply_text("⏹️ Bot is now inactive and will not respond to student questions.")
+    await update.message.reply_text(
+        "⏹️ Bot is now inactive and will not respond to student questions."
+    )
+
 
 async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Shows the current bot status for advisors."""
     logger.debug("Processing /status command...")
 
     if not update.message or not update.effective_user:
-        logger.warning("✗ Received /status command with no message or user")
+        logger.warning(
+            "Invalid /status command", extra={"error": "Missing message or user"}
+        )
         return
 
     user_id = update.effective_user.id
 
     if user_id not in ADVISOR_USER_IDS:
-        logger.warning(f"✗ Non-advisor user {user_id} attempted to use /status")
-        log_user_info(update, "status_command_denied", "User not in advisor list")
-        await update.message.reply_text("Sorry, this command is only available to advisors.")
+        logger.warning("Non-advisor attempted /status", extra={"user_id": user_id})
+        log_user_info(
+            update, "status_command_denied", {"reason": "Not in advisor list"}
+        )
+        await update.message.reply_text(
+            "Sorry, this command is only available to advisors."
+        )
         return
 
-    status = "🟢 Active" if BOT_IS_ACTIVE else "🔴 Inactive"
-    faq_status = "✅ Loaded" if FAQ_CONTENT else "❌ Not loaded"
-    openai_status = "✅ Connected" if client else "❌ Not connected"
-
     status_info = {
-        'bot_active': BOT_IS_ACTIVE,
-        'faq_loaded': bool(FAQ_CONTENT),
-        'openai_connected': bool(client),
-        'advisors_count': len(ADVISOR_USER_IDS)
+        "bot_active": BOT_IS_ACTIVE,
+        "faq_loaded": bool(FAQ_CONTENT),
+        "openai_connected": bool(client),
+        "advisors_count": len(ADVISOR_USER_IDS),
     }
 
-    logger.info(f"✓ Status command executed by advisor {user_id}")
-    log_user_info(update, "status_command_success", json.dumps(status_info))
+    logger.info("Status command executed", extra={"user_id": user_id, **status_info})
+    log_user_info(update, "status_command_success", status_info)
 
     status_message = f"""
 📊 **Bot Status**
-Status: {status}
-FAQ: {faq_status}
-OpenAI: {openai_status}
+Status: {"🟢 Active" if BOT_IS_ACTIVE else "🔴 Inactive"}
+FAQ: {"✅ Loaded" if FAQ_CONTENT else "❌ Not loaded"}
+OpenAI: {"✅ Connected" if client else "❌ Not connected"}
 Advisors: {len(ADVISOR_USER_IDS)} configured
     """
 
-    await update.message.reply_text(status_message, parse_mode='Markdown')
+    await update.message.reply_text(status_message, parse_mode="Markdown")
+
 
 def sanitize_markdown(text: str) -> str:
     """Sanitize markdown text to prevent Telegram parsing errors."""
     if not text:
         return text
 
-    logger.debug(f"Sanitizing markdown text: '{text[:200]}{'...' if len(text) > 200 else ''}'")
+    logger.debug(
+        "Sanitizing markdown text",
+        extra={"text_preview": text[:200] + ("..." if len(text) > 200 else "")},
+    )
 
     # Fix unmatched markdown characters
-    for char in ['*', '_', '`']:
+    for char in ["*", "_", "`"]:
         count = text.count(char)
         if count % 2 != 0:
             last_pos = text.rfind(char)
             if last_pos >= 0:
-                text = text[:last_pos] + '\\' + char + text[last_pos + 1:]
+                text = text[:last_pos] + "\\" + char + text[last_pos + 1 :]
                 logger.debug(f"Fixed unmatched {char}")
 
     # Fix unmatched square brackets
-    if text.count('[') != text.count(']'):
-        text = text.replace('[', '\\[').replace(']', '\\]')
+    if text.count("[") != text.count("]"):
+        text = text.replace("[", "\\[").replace("]", "\\]")
         logger.debug("Fixed unmatched square brackets")
 
     # Escape other problematic characters
-    for char in ['>', '<', '&']:
-        if char in text:
-            text = text.replace(char, f'\\{char}')
+    for char in [">", "<", "&"]:
+        text = text.replace(char, f"\\{char}")
 
-    logger.debug(f"Sanitized text: '{text[:200]}{'...' if len(text) > 200 else ''}'")
+    logger.debug(
+        "Sanitized text",
+        extra={"text_preview": text[:200] + ("..." if len(text) > 200 else "")},
+    )
     return text
+
 
 def get_llm_response(user_message: str, user_id: int = 0, chat_id: int = 0) -> str:
     """Get response from OpenAI using FAQ content."""
     start_time = time.time()
-    logger.debug(f"Processing LLM request for user {user_id}: '{user_message[:100]}{'...' if len(user_message) > 100 else ''}'")
+    logger.debug(
+        "Processing LLM request",
+        extra={
+            "user_id": user_id,
+            "message_preview": user_message[:100]
+            + ("..." if len(user_message) > 100 else ""),
+        },
+    )
 
     if not client:
-        logger.error("✗ OpenAI client not initialized")
+        logger.error("OpenAI client not initialized")
         return CANNOT_ANSWER_MARKER
 
     if not FAQ_CONTENT:
-        logger.warning("✗ FAQ_CONTENT not available")
+        logger.warning("FAQ content not available")
         return CANNOT_ANSWER_MARKER
 
     system_prompt = f"""You are a helpful AI assistant for students. Your knowledge is limited to the following FAQ:
@@ -272,50 +362,66 @@ Ensure your response is in valid Markdown format, with proper syntax for *, _, `
 """
 
     try:
-        logger.debug(f"Sending request to OpenAI API for user {user_id}")
+        logger.debug("Sending request to OpenAI API", extra={"user_id": user_id})
 
-        messages: List[Union[ChatCompletionSystemMessageParam, ChatCompletionUserMessageParam]] = [
+        messages: List[
+            Union[ChatCompletionSystemMessageParam, ChatCompletionUserMessageParam]
+        ] = [
             ChatCompletionSystemMessageParam(role="system", content=system_prompt),
             ChatCompletionUserMessageParam(role="user", content=user_message),
         ]
 
         completion = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=messages,
-            temperature=0.2,
-            max_tokens=1000
+            model="gpt-4o-mini", messages=messages, temperature=0.2, max_tokens=1000
         )
 
-        response_text = completion.choices[0].message.content
-        if response_text is None:
-            response_text = CANNOT_ANSWER_MARKER
-        else:
-            response_text = response_text.strip()
-
+        response_text = completion.choices[0].message.content or CANNOT_ANSWER_MARKER
+        response_text = response_text.strip()
         processing_time = time.time() - start_time
 
-        response_type = "not_question" if response_text == NOT_A_QUESTION_MARKER else \
-                       "cannot_answer" if response_text == CANNOT_ANSWER_MARKER else \
-                       "answered"
+        response_type = (
+            "not_question"
+            if response_text == NOT_A_QUESTION_MARKER
+            else "cannot_answer"
+            if response_text == CANNOT_ANSWER_MARKER
+            else "answered"
+        )
 
-        logger.info(f"✓ LLM response: {response_type} ({processing_time:.2f}s)")
-        logger.debug(f"LLM response preview: '{response_text[:200]}{'...' if len(response_text) > 200 else ''}'")
+        logger.info(
+            "LLM response",
+            extra={
+                "response_type": response_type,
+                "processing_time": round(processing_time, 2),
+                "response_preview": response_text[:200]
+                + ("..." if len(response_text) > 200 else ""),
+            },
+        )
 
-        if hasattr(completion, 'usage') and completion.usage is not None:
-            logger.debug(f"Token usage: Prompt={completion.usage.prompt_tokens}, Completion={completion.usage.completion_tokens}")
-        else:
-            logger.debug("No token usage data available")
+        if hasattr(completion, "usage") and completion.usage:
+            logger.debug(
+                "Token usage",
+                extra={
+                    "prompt_tokens": completion.usage.prompt_tokens,
+                    "completion_tokens": completion.usage.completion_tokens,
+                },
+            )
 
         return response_text
 
     except Exception as e:
-        logger.error(f"✗ Error calling OpenAI: {e}")
+        logger.exception("Error calling OpenAI", extra={"error": str(e)})
         return CANNOT_ANSWER_MARKER
+
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handles incoming text messages with enhanced typing status."""
-    if not update.message or not update.message.text or not update.effective_user or not update.effective_chat:
-        logger.debug("Message ignored - missing required attributes")
+    if (
+        not update.message
+        or not update.message.text
+        or not update.effective_user
+        or not update.effective_chat
+    ):
+        logger.debug("Message ignored", extra={"reason": "Missing required attributes"})
         return
 
     message_text = update.message.text.strip()
@@ -323,52 +429,61 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat = update.effective_chat
     chat_id = chat.id
 
-    logger.debug(f"Processing message from user {user.id} in chat {chat_id}: '{message_text[:100]}{'...' if len(message_text) > 100 else ''}'")
+    logger.debug(
+        "Processing message",
+        extra={
+            "user_id": user.id,
+            "chat_id": chat_id,
+            "message_preview": message_text[:100]
+            + ("..." if len(message_text) > 100 else ""),
+        },
+    )
 
     # Skip advisors
     if user.id in ADVISOR_USER_IDS:
-        logger.info(f"Message from advisor {user.id} ignored")
-        log_user_info(update, "message_ignored", "User is advisor")
+        logger.info("Message from advisor ignored", extra={"user_id": user.id})
+        log_user_info(update, "message_ignored", {"reason": "User is advisor"})
         return
 
     # Check bot status
     if not BOT_IS_ACTIVE:
-        logger.info("Bot inactive - ignoring message")
-        log_user_info(update, "message_ignored", "Bot inactive")
+        logger.info("Bot inactive", extra={"reason": "Ignoring message"})
+        log_user_info(update, "message_ignored", {"reason": "Bot inactive"})
         return
 
     # Skip commands and empty messages
     if message_text.startswith("/") or not message_text:
-        logger.debug(f"Ignoring {'command' if message_text.startswith('/') else 'empty'} message")
+        logger.debug("Ignoring message", extra={"reason": "Command or empty message"})
         return
 
-    # Send typing status with enhanced logging
+    # Send typing status
     try:
-        logger.debug(f"Sending typing status to chat {chat_id}")
+        logger.debug("Sending typing status", extra={"chat_id": chat_id})
         await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
-        logger.info("✓ Typing status sent successfully")
+        logger.info("Typing status sent", extra={"chat_id": chat_id})
     except Exception as e:
-        logger.error(f"✗ Failed to send typing status: {e}")
+        logger.exception("Failed to send typing status", extra={"error": str(e)})
 
-    log_user_info(update, "message_processing", f"Message: '{message_text[:200]}{'...' if len(message_text) > 200 else ''}'")
-    logger.info(f"Processing student message from user {user.id}: '{message_text[:100]}{'...' if len(message_text) > 100 else ''}'")
+    log_user_info(
+        update,
+        "message_processing",
+        {"message": message_text[:200] + ("..." if len(message_text) > 200 else "")},
+    )
 
     try:
         llm_answer = get_llm_response(message_text, user_id=user.id, chat_id=chat_id)
         if llm_answer == NOT_A_QUESTION_MARKER:
-            logger.info("Message identified as not a question")
+            logger.info("Message not a question", extra={"user_id": user.id})
             return
 
         elif llm_answer == CANNOT_ANSWER_MARKER or not llm_answer:
-            logger.info("Cannot answer question")
+            logger.info("Cannot answer question", extra={"user_id": user.id})
             log_user_info(update, "message_cannot_answer")
 
             # Notify moderator
             if MODERATOR_CHAT_ID:
                 try:
-                    logger.debug(f"Sending notification to moderator chat {MODERATOR_CHAT_ID}")
                     chat_title = chat.title if chat.title else f"Chat {chat_id}"
-
                     message_link = f"https://t.me/c/{str(chat_id)[4:] if str(chat_id).startswith('-100') else chat_id}/{update.message.message_id}"
 
                     moderator_message = (
@@ -382,30 +497,44 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     await context.bot.send_message(
                         chat_id=MODERATOR_CHAT_ID,
                         text=moderator_message,
-                        parse_mode='Markdown'
+                        parse_mode="Markdown",
                     )
-                    logger.info("✓ Moderator notification sent")
+                    logger.info(
+                        "Moderator notification sent",
+                        extra={"chat_id": MODERATOR_CHAT_ID},
+                    )
 
                 except Exception as e:
-                    logger.error(f"✗ Failed to notify moderator: {e}")
+                    logger.exception(
+                        "Failed to notify moderator", extra={"error": str(e)}
+                    )
 
         else:
-            logger.info("✅ Successfully answered question")
-            log_user_info(update, "message_answered", f"Response length: {len(llm_answer)}")
+            logger.info(
+                "Question answered",
+                extra={"user_id": user.id, "response_length": len(llm_answer)},
+            )
+            log_user_info(
+                update, "message_answered", {"response_length": len(llm_answer)}
+            )
 
             # Send response with markdown sanitization
             try:
-                logger.debug("Attempting to send response with Markdown")
-                await update.message.reply_text(llm_answer, parse_mode='Markdown')
-                logger.debug("✓ Response sent with Markdown parsing")
+                await update.message.reply_text(llm_answer, parse_mode="Markdown")
+                logger.debug("Response sent with Markdown", extra={"chat_id": chat_id})
             except Exception as markdown_error:
-                logger.warning(f"✗ Markdown error: {markdown_error}")
+                logger.warning("Markdown error", extra={"error": str(markdown_error)})
                 try:
                     sanitized = sanitize_markdown(llm_answer)
-                    await update.message.reply_text(sanitized, parse_mode='Markdown')
-                    logger.info("✓ Response sent with sanitized Markdown")
+                    await update.message.reply_text(sanitized, parse_mode="Markdown")
+                    logger.info(
+                        "Response sent with sanitized Markdown",
+                        extra={"chat_id": chat_id},
+                    )
                 except Exception as e:
-                    logger.error(f"✗ Failed to send sanitized response: {e}")
+                    logger.exception(
+                        "Failed to send sanitized response", extra={"error": str(e)}
+                    )
                     if MODERATOR_CHAT_ID:
                         try:
                             moderator_message = (
@@ -414,20 +543,27 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                 f"Please review and forward if appropriate.\n\n"
                                 f"Original query: {message_text}\n\nLLM Answer:\n{llm_answer}"
                             )
-                            await context.bot.send_message(chat_id=MODERATOR_CHAT_ID, text=moderator_message)
-                            logger.info(f"✓ Sent to moderator {MODERATOR_CHAT_ID}")
+                            await context.bot.send_message(
+                                chat_id=MODERATOR_CHAT_ID, text=moderator_message
+                            )
+                            logger.info(
+                                "Sent to moderator",
+                                extra={"chat_id": MODERATOR_CHAT_ID},
+                            )
                         except Exception as final_error:
-                            logger.error(f"✗ Failed to notify moderator: {final_error}")
+                            logger.exception(
+                                "Failed to notify moderator",
+                                extra={"error": str(final_error)},
+                            )
 
     except Exception as e:
-        logger.error(f"✗ Error handling message: {e}")
-        log_user_info(update, "message_error", f"Error: {str(e)}")
+        logger.exception("Error handling message", extra={"error": str(e)})
+        log_user_info(update, "message_error", {"error": str(e)})
+
 
 async def handle_reaction_downvote(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handles downvote reactions to delete messages with enhanced logging."""
-    logger.debug("=== REACTION HANDLER TRIGGERED ===")
-    logger.debug(f"Update type: {type(update)}")
-    logger.debug(f"Message reaction: {update.message_reaction}")
+    """Handles downvote reactions to delete messages."""
+    logger.debug("Reaction handler triggered", extra={"update_type": str(type(update))})
 
     if not update.message_reaction or not update.message_reaction.user:
         logger.debug("No message reaction or user found")
@@ -437,171 +573,195 @@ async def handle_reaction_downvote(update: Update, context: ContextTypes.DEFAULT
     chat = reaction.chat
     message_id = reaction.message_id
     user = reaction.user
-    user_id = user.id if user is not None else None
+    assert user is not None
+    user_id = user.id
 
-    logger.info(f"Reaction from user {user_id} in chat {chat.id} for message {message_id}")
+    logger.info(
+        "Reaction received",
+        extra={"user_id": user_id, "chat_id": chat.id, "message_id": message_id},
+    )
 
     # Only advisors can trigger deletion
     if user_id not in ADVISOR_USER_IDS:
-        logger.debug(f"Non-advisor user {user_id} reaction ignored")
-        log_user_info(update, "reaction_ignored", "Non-advisor user")
+        logger.debug("Non-advisor reaction ignored", extra={"user_id": user_id})
+        log_user_info(update, "reaction_ignored", {"reason": "Non-advisor user"})
         return
 
     # Check for new thumbs down reaction
     downvote_emoji = "👎"
-    is_new_downvote = False
-
-    if reaction.new_reaction:
-        for rtype in reaction.new_reaction:
-            if isinstance(rtype, ReactionTypeEmoji) and rtype.emoji == downvote_emoji:
-                is_new_downvote = True
-                break
+    is_new_downvote = any(
+        isinstance(rtype, ReactionTypeEmoji) and rtype.emoji == downvote_emoji
+        for rtype in reaction.new_reaction
+    )
 
     if not is_new_downvote:
-        logger.debug("Reaction was not a new thumbs down")
+        logger.debug("Not a new thumbs down reaction")
         return
 
     # Skip deletion in moderator chat
     if MODERATOR_CHAT_ID and str(chat.id) == MODERATOR_CHAT_ID:
-        logger.info(f"Skipping deletion in moderator chat {chat.id}")
-        log_user_info(update, "downvote_skipped", "Moderator chat")
+        logger.info("Skipping deletion in moderator chat", extra={"chat_id": chat.id})
+        log_user_info(update, "downvote_skipped", {"reason": "Moderator chat"})
         return
 
     # Delete message
     try:
-        logger.debug(f"Attempting to delete message {message_id} in chat {chat.id}")
         await context.bot.delete_message(chat_id=chat.id, message_id=message_id)
-        logger.info(f"✓ Message {message_id} deleted successfully in chat {chat.id}")
-        log_user_info(update, "message_deleted", f"Message {message_id} by advisor {user_id}")
+        logger.info(
+            "Message deleted",
+            extra={"chat_id": chat.id, "message_id": message_id, "advisor_id": user_id},
+        )
+        log_user_info(
+            update, "message_deleted", {"message_id": message_id, "advisor_id": user_id}
+        )
     except Exception as e:
-        logger.error(f"✗ Failed to delete message: {e}")
-        log_user_info(update, "delete_failed", f"Error: {str(e)}")
+        logger.exception("Failed to delete message", extra={"error": str(e)})
+        log_user_info(update, "delete_failed", {"error": str(e)})
+
 
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Enhanced error logging."""
     error_info = {
-        'error': str(context.error),
-        'error_type': type(context.error).__name__,
-        'update': str(update) if update else 'None',
-        'timestamp': datetime.now().isoformat()
+        "error": str(context.error),
+        "error_type": type(context.error).__name__,
+        "update": str(update) if update else "None",
+        "timestamp": datetime.now().isoformat(),
     }
 
-    logger.error(f"✗ Exception: {context.error}")
-    logger.debug(f"Error details: {json.dumps(error_info, ensure_ascii=False)}")
-
+    logger.exception("Exception occurred", extra=error_info)
     if isinstance(update, Update) and update.effective_user:
-        logger.error(f"Error occurred for user {update.effective_user.id}")
+        logger.error("Error for user", extra={"user_id": update.effective_user.id})
+
 
 async def webhook_handler(request):
-    """Handle incoming webhook requests with detailed logging."""
+    """Handle incoming webhook requests."""
     request_start_time = time.time()
     client_ip = request.remote
 
-    logger.debug(f"Webhook request from {client_ip}")
+    logger.debug("Webhook request received", extra={"client_ip": client_ip})
 
     if not application:
-        logger.error("✗ Application not initialized")
+        logger.error("Application not initialized")
         return web.Response(status=500)
 
     try:
         data = await request.json()
-        logger.debug(f"Webhook data: {json.dumps(data, ensure_ascii=False)[:500]}{'...' if len(str(data)) > 500 else ''}")
+        logger.debug(
+            "Webhook data",
+            extra={
+                "data_preview": json.dumps(data, ensure_ascii=False)[:500]
+                + ("..." if len(str(data)) > 500 else "")
+            },
+        )
 
         update = Update.de_json(data, application.bot)
         if update:
-            logger.debug(f"Processing update: {update}")
             await application.process_update(update)
             processing_time = time.time() - request_start_time
-            logger.info(f"✓ Webhook processed in {processing_time:.2f}s")
+            logger.info(
+                "Webhook processed",
+                extra={"processing_time": round(processing_time, 2)},
+            )
         else:
-            logger.warning("✗ Failed to create Update object")
+            logger.warning("Failed to create Update object")
 
         return web.Response(status=200)
 
     except Exception as e:
-        logger.error(f"✗ Webhook error: {e}")
+        logger.exception("Webhook error", extra={"error": str(e)})
         return web.Response(status=500)
 
+
 async def health_check(request):
-    """Health check endpoint with status logging."""
+    """Health check endpoint."""
     logger.debug("Health check request")
     health_status = {
-        'status': 'healthy',
-        'bot_active': BOT_IS_ACTIVE,
-        'faq_loaded': bool(FAQ_CONTENT),
-        'openai_connected': bool(client),
-        'timestamp': datetime.now().isoformat()
+        "status": "healthy",
+        "bot_active": BOT_IS_ACTIVE,
+        "faq_loaded": bool(FAQ_CONTENT),
+        "openai_connected": bool(client),
+        "timestamp": datetime.now().isoformat(),
     }
-    logger.debug(f"Health status: {health_status}")
+    logger.debug("Health status", extra=health_status)
     return web.Response(text="OK", status=200)
 
+
 async def main():
-    """Main function to start the bot with enhanced initialization logging."""
-    global application
-    logger.info("=== Bot Initialization ===")
+    """Main function to start the bot."""
+    logger.info("=== Bot Initialization ===", extra={"phase": "init"})
 
     # Validate configuration
     if not TELEGRAM_TOKEN:
-        logger.critical("✗ TELEGRAM_BOT_TOKEN missing - cannot start")
+        logger.critical("Missing TELEGRAM_BOT_TOKEN", extra={"error": "Cannot start"})
         return
     if not OPENAI_API_KEY:
-        logger.warning("✗ OPENAI_API_KEY missing - limited functionality")
+        logger.warning(
+            "Missing OPENAI_API_KEY", extra={"warning": "Limited functionality"}
+        )
 
     logger.info("Creating Telegram application...")
-    application = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
-    logger.info("✓ Application created")
+    global application
+    application = ApplicationBuilder().token(TELEGRAM_TOKEN).build()  # type: ignore
+    logger.info("Application created")
 
-    logger.debug("Registering reaction handler")
+    logger.debug("Registering handlers")
     application.add_handler(MessageReactionHandler(handle_reaction_downvote))
-
-    logger.debug("Registering command handlers")
     application.add_handler(CommandHandler("start", start_command))
     application.add_handler(CommandHandler("stop", stop_command))
     application.add_handler(CommandHandler("status", status_command))
-
-    logger.debug("Registering message handler")
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-
-    logger.debug("Registering error handler")
+    application.add_handler(
+        MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message)
+    )
     application.add_error_handler(error_handler)
-    logger.info("✓ All handlers registered")
+    logger.info("All handlers registered")
 
-    # Initialize application
     logger.debug("Initializing application...")
     await application.initialize()
     await application.start()
-    logger.info("✓ Application started")
+    logger.info("Application started")
 
     # Send restart notification
     if ADVISOR_USER_IDS:
-        restart_msg = "✅ Bot restarted and active" + (" (Webhook)" if WEBHOOK_DOMAIN else " (Polling)")
+        restart_msg = "✅ Bot restarted and active" + (
+            " (Webhook)" if WEBHOOK_DOMAIN else " (Polling)"
+        )
         success_count = 0
 
         for advisor_id in ADVISOR_USER_IDS:
             try:
                 await application.bot.send_message(chat_id=advisor_id, text=restart_msg)
                 success_count += 1
-                logger.debug(f"Restart notification sent to {advisor_id}")
+                logger.debug(
+                    "Restart notification sent", extra={"advisor_id": advisor_id}
+                )
             except Exception as e:
-                logger.error(f"✗ Failed to notify {advisor_id}: {e}")
+                logger.exception(
+                    "Failed to notify advisor",
+                    extra={"advisor_id": advisor_id, "error": str(e)},
+                )
 
-        logger.info(f"Restart notifications sent: {success_count}/{len(ADVISOR_USER_IDS)}")
+        logger.info(
+            "Restart notifications",
+            extra={"successful": success_count, "total": len(ADVISOR_USER_IDS)},
+        )
 
     # Start in webhook or polling mode
     if WEBHOOK_DOMAIN and WEBHOOK_URL_PATH:
-        logger.info("=== Starting in Webhook Mode ===")
-        webhook_url = f"https://{WEBHOOK_DOMAIN.rstrip('/')}/{WEBHOOK_URL_PATH.lstrip('/')}"
-        logger.info(f"Webhook URL: {webhook_url}")
+        logger.info("Starting in Webhook Mode", extra={"phase": "webhook"})
+        webhook_url = (
+            f"https://{WEBHOOK_DOMAIN.rstrip('/')}/{WEBHOOK_URL_PATH.lstrip('/')}"
+        )
+        logger.info("Webhook URL set", extra={"url": webhook_url})
 
-        # Set up webhook
         try:
-            await application.bot.set_webhook(webhook_url, allowed_updates=["message", "message_reaction"])
-            logger.info(f"✓ Webhook set: {webhook_url}")
+            await application.bot.set_webhook(
+                webhook_url, allowed_updates=["message", "message_reaction"]
+            )
+            logger.info("Webhook set", extra={"url": webhook_url})
         except Exception as e:
-            logger.error(f"✗ Webhook setup failed: {e}")
+            logger.exception("Webhook setup failed", extra={"error": str(e)})
             return
 
-        # Create web server
         app = web.Application()
         app.router.add_post(f"/{WEBHOOK_URL_PATH}", webhook_handler)
         app.router.add_get("/health", health_check)
@@ -610,21 +770,23 @@ async def main():
         await runner.setup()
         site = web.TCPSite(runner, WEBHOOK_LISTEN_IP, WEBHOOK_PORT)
         await site.start()
-        logger.info(f"✓ Web server started on {WEBHOOK_LISTEN_IP}:{WEBHOOK_PORT}")
+        logger.info(
+            "Web server started", extra={"ip": WEBHOOK_LISTEN_IP, "port": WEBHOOK_PORT}
+        )
 
-        # Run indefinitely
         while True:
             await asyncio.sleep(3600)
     else:
-        logger.info("=== Starting in Polling Mode ===")
+        logger.info("Starting in Polling Mode", extra={"phase": "polling"})
         application.run_polling(allowed_updates=["message", "message_reaction"])
+
 
 if __name__ == "__main__":
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
-        logger.info("Shutdown signal received")
+        logger.info("Shutdown signal received", extra={"phase": "shutdown"})
     except Exception as e:
-        logger.critical(f"Fatal error: {e}")
+        logger.exception("Fatal error", extra={"error": str(e)})
     finally:
-        logger.info("=== Bot Shutdown Complete ===")
+        logger.info("=== Bot Shutdown Complete ===", extra={"phase": "shutdown"})
