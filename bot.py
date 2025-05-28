@@ -2,11 +2,13 @@ import os
 import logging
 import asyncio
 import json
+import re
 import time
 from datetime import datetime
 from aiohttp import web, ClientSession
-from telegram import Update
+from telegram import Update, ReactionTypeEmoji
 from telegram.ext import ApplicationBuilder, ContextTypes, MessageHandler, CommandHandler, filters
+from telegram.constants import ChatAction
 from openai import OpenAI
 from dotenv import load_dotenv
 
@@ -256,6 +258,68 @@ Advisors: {len(ADVISOR_USER_IDS)} configured
     await update.message.reply_text(status_message, parse_mode='Markdown')
     logger.debug("Status information sent to advisor")
 
+
+def sanitize_markdown(text: str) -> str:
+    """
+    Sanitize markdown text to prevent Telegram parsing errors.
+    This function fixes common markdown issues that cause parsing failures.
+    """
+    if not text:
+        return text
+    
+    # Log the original text for debugging
+    logger.debug(f"Sanitizing markdown text: '{text[:200]}{'...' if len(text) > 200 else ''}'")
+    
+    # Fix unmatched asterisks (bold markers)
+    # Count asterisks and ensure they're paired
+    asterisk_count = text.count('*')
+    if asterisk_count % 2 != 0:
+        # If odd number of asterisks, escape the last one
+        last_asterisk_pos = text.rfind('*')
+        text = text[:last_asterisk_pos] + '\\*' + text[last_asterisk_pos + 1:]
+        logger.debug("Fixed unmatched asterisk")
+    
+    # Fix unmatched underscores (italic markers)
+    underscore_count = text.count('_')
+    if underscore_count % 2 != 0:
+        # If odd number of underscores, escape the last one
+        last_underscore_pos = text.rfind('_')
+        text = text[:last_underscore_pos] + '\\_' + text[last_underscore_pos + 1:]
+        logger.debug("Fixed unmatched underscore")
+    
+    # Fix unmatched backticks (code markers)
+    # Handle both single backticks and triple backticks
+    single_backtick_count = len(re.findall(r'(?<!`)`(?!`)', text))
+    if single_backtick_count % 2 != 0:
+        # Escape unmatched single backticks
+        text = re.sub(r'(?<!`)`(?!`)', r'\\`', text)
+        logger.debug("Fixed unmatched single backticks")
+    
+    # Check for triple backticks (code blocks)
+    triple_backtick_count = text.count('```')
+    if triple_backtick_count % 2 != 0:
+        # If odd number of triple backticks, escape the last one
+        text = text[::-1].replace('```', '```\\', 1)[::-1]
+        logger.debug("Fixed unmatched triple backticks")
+    
+    # Fix unmatched square brackets (links)
+    open_bracket_count = text.count('[')
+    close_bracket_count = text.count(']')
+    if open_bracket_count != close_bracket_count:
+        # Escape unmatched brackets
+        text = text.replace('[', '\\[').replace(']', '\\]')
+        logger.debug("Fixed unmatched square brackets")
+    
+    # Remove or fix other problematic characters
+    # Escape special markdown characters that might cause issues
+    special_chars = ['>', '<', '&']
+    for char in special_chars:
+        if char in text:
+            text = text.replace(char, f'\\{char}')
+    
+    logger.debug(f"Sanitized text: '{text[:200]}{'...' if len(text) > 200 else ''}'")
+    return text
+
 def get_llm_response(user_message: str, user_id: int = None, chat_id: int = None) -> str:
     """
     Uses OpenAI to:
@@ -290,6 +354,13 @@ Your tasks are:
    * If you can find a relevant answer in the FAQ KNOWLEDGE BASE, provide the answer directly. Do not refer to "the FAQ" in your answer, just provide the information as if you know it.
    * If the message is a question, but you cannot find an answer within the FAQ KNOWLEDGE BASE, respond with the exact string: {CANNOT_ANSWER_MARKER}
 
+IMPORTANT: Your response must use valid Markdown formatting. Be careful with:
+- Asterisks (*) for bold - ensure they are paired
+- Underscores (_) for italic - ensure they are paired  
+- Backticks (`) for code - ensure they are paired
+- Square brackets ([]) and parentheses (()) for links - ensure proper syntax
+- Avoid using special characters like <, >, & unless properly escaped
+
 Do not use any external knowledge or information not present in the FAQ KNOWLEDGE BASE.
 Be concise and helpful, answer must be markdown formatted.
 """
@@ -314,8 +385,15 @@ Be concise and helpful, answer must be markdown formatted.
                        "cannot_answer" if response_text == CANNOT_ANSWER_MARKER else \
                        "answered"
         
+        # ENHANCED LOGGING: Log the actual LLM response
         logger.info(f"✓ LLM processed message from user {user_id}: '{user_message[:50]}{'...' if len(user_message) > 50 else ''}' -> {response_type} ({processing_time:.2f}s)")
-        logger.debug(f"LLM response preview: '{response_text[:100]}{'...' if len(response_text) > 100 else ''}'")
+        
+        # Log the full response for debugging (but truncate for readability)
+        if response_type == "answered":
+            logger.debug(f"LLM full response for user {user_id}: {repr(response_text)}")  # Use repr() to see special characters
+            logger.info(f"LLM response preview: '{response_text[:200]}{'...' if len(response_text) > 200 else ''}'")
+        else:
+            logger.debug(f"LLM response: {response_text}")
         
         # Log token usage if available
         if hasattr(completion, 'usage'):
@@ -372,6 +450,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         log_user_info(update, "message_ignored", "Empty message")
         return
 
+    await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
+
     # Log the actual message processing
     log_user_info(update, "message_processing", f"Message: '{user_message[:200]}{'...' if len(user_message) > 200 else ''}'")
     logger.info(f"Processing student message from user {user.id} (@{user.username}) in chat {chat_id}: '{user_message[:100]}{'...' if len(user_message) > 100 else ''}'")
@@ -423,8 +503,36 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             logger.info(f"✅ Successfully answered question from user {user.id}: '{user_message[:50]}{'...' if len(user_message) > 50 else ''}' ({processing_time:.2f}s)")
             log_user_info(update, "message_answered", f"Processing time: {processing_time:.2f}s, Response length: {len(llm_answer)}")
             
-            await update.message.reply_text(llm_answer, parse_mode='Markdown')
-            logger.debug(f"Answer sent to user {user.id}, response length: {len(llm_answer)} characters")
+            # ENHANCED ERROR HANDLING: Sanitize markdown before sending
+            try:
+                # First attempt: try sending as-is
+                await update.message.reply_text(llm_answer, parse_mode='Markdown')
+                logger.debug(f"✓ Answer sent to user {user.id} with Markdown parsing, response length: {len(llm_answer)} characters")
+                
+            except Exception as markdown_error:
+                logger.warning(f"✗ Failed to send message with Markdown parsing to user {user.id}: {markdown_error}")
+                logger.debug(f"Problematic response was: {repr(llm_answer)}")
+                
+                # Second attempt: sanitize markdown
+                try:
+                    sanitized_answer = sanitize_markdown(llm_answer)
+                    await update.message.reply_text(sanitized_answer, parse_mode='Markdown')
+                    logger.info(f"✓ Answer sent to user {user.id} with sanitized Markdown after initial failure")
+                    
+                except Exception as sanitized_error:
+                    logger.warning(f"✗ Failed to send sanitized Markdown to user {user.id}: {sanitized_error}")
+                    
+                    # Final fallback: send to moderator and inform user
+                    try:
+                        moderator_message = f"Failed to send the following answer to user {user.id} (username: {user.username}, name: {user.first_name} {user.last_name}). Please review and forward if appropriate.\\n\\nOriginal query: {update.message.text}\\n\\nLLM Answer:\\n{llm_answer}"
+                        await context.bot.send_message(chat_id=MODERATOR_CHAT_ID, text=moderator_message)
+                        logger.info(f"✓ llm_answer for user {user.id} sent to moderator {MODERATOR_CHAT_ID}")
+                        
+                        # await update.message.reply_text("I encountered a technical issue trying to send you the answer. Your query has been forwarded to a moderator who will get back to you shortly.")
+                        # logger.info(f"✓ User {user.id} informed about forwarding to moderator.")
+                    except Exception as final_error:
+                        logger.error(f"✗ Complete failure to send any message to user {user.id} or moderator: {final_error}")
+                        
             
     except Exception as e:
         processing_time = time.time() - message_start_time
@@ -452,6 +560,67 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> N
     # Try to extract user info if possible
     if hasattr(update, 'effective_user') and update.effective_user:
         logger.error(f"Error occurred for user {update.effective_user.id} (@{update.effective_user.username})")
+
+async def handle_reaction_downvote(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handles downvote reactions from advisors to delete messages, primarily in student chats."""
+    logger.debug(f"Processing reaction update: {update}")
+
+    if not update.message_reaction:
+        logger.debug("No message reaction found in update, skipping.")
+        return
+
+    chat = update.message_reaction.chat
+    message_id = update.message_reaction.message_id
+    reacting_user = update.message_reaction.user
+
+    if not reacting_user:
+        logger.debug("No user found in reaction (perhaps a channel reaction without user info?), skipping.")
+        return
+
+    reacting_user_id = reacting_user.id
+
+    # Rule 1: Only advisors can trigger this.
+    if reacting_user_id not in ADVISOR_USER_IDS:
+        logger.debug(f"Reaction from non-advisor user {reacting_user_id} in chat {chat.id}. Skipping.")
+        return
+
+    logger.info(f"Reaction from advisor {reacting_user_id} ('{reacting_user.username or reacting_user.first_name}') in chat {chat.id} (name: '{chat.title or 'DM'}') for message {message_id}.")
+
+    # Rule 2: Check if it's a new "thumbs down" reaction.
+    downvote_emoji = "👎"
+    is_new_downvote = False
+    if update.message_reaction.new_reaction:
+        for reaction_type in update.message_reaction.new_reaction:
+            if isinstance(reaction_type, ReactionTypeEmoji) and reaction_type.emoji == downvote_emoji:
+                is_new_downvote = True
+                break
+    
+    if not is_new_downvote:
+        # This also covers cases where a downvote was removed, as new_reaction would be empty or different.
+        logger.debug(f"Reaction from advisor {reacting_user_id} in chat {chat.id} was not a new downvote. New reactions: {update.message_reaction.new_reaction}")
+        return
+
+    # At this point, an advisor has added a "👎" reaction.
+
+    # Rule 3: Determine if we should delete the message based on the chat.
+    # MODERATOR_CHAT_ID is loaded globally.
+    # We want to delete in student/group chats, but NOT in the dedicated MODERATOR_CHAT_ID.
+    if MODERATOR_CHAT_ID and str(chat.id) == MODERATOR_CHAT_ID:
+        logger.info(f"Advisor {reacting_user_id} downvoted message {message_id} in the MODERATOR_CHAT_ID ({chat.id}). Deletion is intentionally skipped for this specific chat.")
+        # log_user_info uses update.effective_user which is correctly populated for reactions.
+        log_user_info(update, "advisor_downvote_moderator_chat_skipped", f"Advisor {reacting_user_id} downvoted msg {message_id} in moderator chat {chat.id}. Deletion intentionally skipped.")
+    else:
+        # This is a non-moderator chat (e.g., student group chat) OR MODERATOR_CHAT_ID is not configured.
+        # Proceed with deletion.
+        logger.info(f"Advisor {reacting_user_id} downvoted message {message_id} in chat {chat.id}. Proceeding with deletion as it's not the configured MODERATOR_CHAT_ID.")
+        try:
+            await context.bot.delete_message(chat_id=chat.id, message_id=message_id)
+            logger.info(f"✓ Successfully deleted message {message_id} in chat {chat.id} due to downvote by advisor {reacting_user_id}.")
+            log_user_info(update, "advisor_downvote_deleted_message", f"Advisor {reacting_user_id} deleted message {message_id} in chat {chat.id}")
+        except Exception as e:
+            logger.error(f"✗ Failed to delete message {message_id} in chat {chat.id} after downvote by advisor {reacting_user_id}: {e}")
+            # Optionally, notify advisor if deletion failed if they have DMs open with bot.
+            # For now, just logging the error.
 
 # Webhook handler
 async def webhook_handler(request):
@@ -564,6 +733,7 @@ async def main():
     application.add_handler(CommandHandler("stop", stop_command))
     application.add_handler(CommandHandler("status", status_command))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    application.add_handler(MessageHandler(filters.REACTION, handle_reaction_downvote))
     application.add_error_handler(error_handler)
     logger.info("✓ All handlers added successfully")
 
