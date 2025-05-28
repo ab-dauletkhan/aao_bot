@@ -425,7 +425,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def handle_reaction_downvote(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handles downvote reactions to delete messages with enhanced logging."""
-    logger.debug("Processing reaction update")
+    logger.debug("=== REACTION HANDLER TRIGGERED ===")
+    logger.debug(f"Update type: {type(update)}")
+    logger.debug(f"Message reaction: {update.message_reaction}")
 
     if not update.message_reaction or not update.message_reaction.user:
         logger.debug("No message reaction or user found")
@@ -549,7 +551,9 @@ async def main():
     application = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
     logger.info("✓ Application created")
 
-    # Add handlers with enhanced logging
+    logger.debug("Registering reaction handler")
+    application.add_handler(MessageReactionHandler(handle_reaction_downvote))
+
     logger.debug("Registering command handlers")
     application.add_handler(CommandHandler("start", start_command))
     application.add_handler(CommandHandler("stop", stop_command))
@@ -557,9 +561,6 @@ async def main():
 
     logger.debug("Registering message handler")
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-
-    logger.debug("Registering reaction handler")
-    application.add_handler(MessageReactionHandler(handle_reaction_downvote, MessageReactionHandler.MESSAGE_REACTION))
 
     logger.debug("Registering error handler")
     application.add_error_handler(error_handler)
