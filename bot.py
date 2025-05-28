@@ -70,7 +70,6 @@ logger.debug("Loading environment variables...")
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 MODERATOR_CHAT_ID = os.getenv("MODERATOR_CHAT_ID")
-ADVISOR_TAG = os.getenv("ADVISOR_TAG", "@advisors")
 ADVISOR_USER_IDS_STR = os.getenv("ADVISOR_USER_IDS", "")
 ADVISOR_USER_IDS = set()
 
@@ -78,7 +77,6 @@ ADVISOR_USER_IDS = set()
 logger.debug(f"TELEGRAM_TOKEN: {'✓ Set' if TELEGRAM_TOKEN else '✗ Missing'}")
 logger.debug(f"OPENAI_API_KEY: {'✓ Set' if OPENAI_API_KEY else '✗ Missing'}")
 logger.debug(f"MODERATOR_CHAT_ID: {'✓ Set' if MODERATOR_CHAT_ID else '✗ Missing'}")
-logger.debug(f"ADVISOR_TAG: {ADVISOR_TAG}")
 logger.debug(f"ADVISOR_USER_IDS_STR: {ADVISOR_USER_IDS_STR}")
 
 if ADVISOR_USER_IDS_STR:
