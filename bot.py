@@ -7,7 +7,7 @@ import time
 from datetime import datetime
 from aiohttp import web, ClientSession
 from telegram import Update, ReactionTypeEmoji
-from telegram.ext import ApplicationBuilder, ContextTypes, MessageHandler, CommandHandler, filters
+from telegram.ext import ApplicationBuilder, ContextTypes, MessageHandler, CommandHandler, filters, MessageReactionHandler
 from telegram.constants import ChatAction
 from openai import OpenAI
 from dotenv import load_dotenv
@@ -15,11 +15,8 @@ from dotenv import load_dotenv
 # Enhanced logging configuration
 def setup_logging():
     """Set up comprehensive logging with multiple handlers."""
-    
-    # Create logs directory if it doesn't exist
     os.makedirs('logs', exist_ok=True)
     
-    # Create formatters
     detailed_formatter = logging.Formatter(
         '%(asctime)s - %(name)s - %(levelname)s - [%(filename)s:%(lineno)d] - %(funcName)s() - %(message)s'
     )
@@ -27,38 +24,34 @@ def setup_logging():
         '%(asctime)s - %(levelname)s - %(message)s'
     )
     
-    # Root logger configuration
     root_logger = logging.getLogger()
     root_logger.setLevel(logging.DEBUG)
     
-    # Console handler (INFO level)
+    # Console handler
     console_handler = logging.StreamHandler()
     console_handler.setLevel(logging.INFO)
     console_handler.setFormatter(simple_formatter)
     root_logger.addHandler(console_handler)
     
-    # File handler for all logs (DEBUG level)
+    # File handlers
     file_handler = logging.FileHandler('logs/bot_debug.log', encoding='utf-8')
     file_handler.setLevel(logging.DEBUG)
     file_handler.setFormatter(detailed_formatter)
     root_logger.addHandler(file_handler)
     
-    # File handler for errors only
     error_handler = logging.FileHandler('logs/bot_errors.log', encoding='utf-8')
     error_handler.setLevel(logging.ERROR)
     error_handler.setFormatter(detailed_formatter)
     root_logger.addHandler(error_handler)
     
-    # File handler for user interactions
     interaction_handler = logging.FileHandler('logs/user_interactions.log', encoding='utf-8')
     interaction_handler.setLevel(logging.INFO)
     interaction_handler.setFormatter(detailed_formatter)
     
-    # Create a custom logger for user interactions
     interaction_logger = logging.getLogger('user_interactions')
     interaction_logger.addHandler(interaction_handler)
     interaction_logger.setLevel(logging.INFO)
-    interaction_logger.propagate = False  # Don't propagate to root logger
+    interaction_logger.propagate = False
     
     return logging.getLogger(__name__), interaction_logger
 
@@ -86,9 +79,9 @@ if ADVISOR_USER_IDS_STR:
         ADVISOR_USER_IDS = set(map(int, ADVISOR_USER_IDS_STR.split(',')))
         logger.info(f"✓ Loaded {len(ADVISOR_USER_IDS)} advisor user IDs: {ADVISOR_USER_IDS}")
     except ValueError as e:
-        logger.error(f"✗ Invalid format for ADVISOR_USER_IDS: {e}. Please use comma-separated integer IDs. Advisors will not be ignored.")
+        logger.error(f"✗ Invalid format for ADVISOR_USER_IDS: {e}. Advisors will not be ignored.")
 
-# Webhook settings from environment variables
+# Webhook settings
 WEBHOOK_LISTEN_IP = os.getenv("WEBHOOK_LISTEN_IP", "0.0.0.0")
 WEBHOOK_PORT = int(os.getenv("PORT", os.getenv("WEBHOOK_PORT", "8080")))
 WEBHOOK_URL_PATH = os.getenv("WEBHOOK_URL_PATH", TELEGRAM_TOKEN)
@@ -107,7 +100,7 @@ except Exception as e:
     logger.error(f"✗ Failed to initialize OpenAI client: {e}")
     client = None
 
-# Load raw FAQ content at startup
+# Load FAQ content
 FAQ_CONTENT = ""
 try:
     logger.debug("Attempting to load FAQ content from faq.md...")
@@ -115,11 +108,10 @@ try:
         FAQ_CONTENT = f.read()
     if FAQ_CONTENT:
         logger.info(f"✓ Successfully loaded FAQ content from faq.md ({len(FAQ_CONTENT)} characters)")
-        logger.debug(f"FAQ preview: {FAQ_CONTENT[:200]}...")
     else:
-        logger.warning("✗ faq.md is empty. Bot may not be able to answer questions accurately.")
+        logger.warning("✗ faq.md is empty")
 except FileNotFoundError:
-    logger.error("✗ faq.md not found. Bot will not be able to answer questions from FAQ.")
+    logger.error("✗ faq.md not found")
 except Exception as e:
     logger.error(f"✗ Error reading faq.md: {e}")
 
@@ -131,10 +123,10 @@ logger.debug(f"Special markers configured: NOT_A_QUESTION='{NOT_A_QUESTION_MARKE
 
 # State variables
 BOT_IS_ACTIVE = True
-application = None  # Global reference for cleanup
+application = None
 
 def log_user_info(update: Update, action: str, additional_info: str = ""):
-    """Helper function to log user information consistently."""
+    """Log user information consistently with enhanced details."""
     user = update.effective_user
     chat = update.effective_chat
     
@@ -155,7 +147,7 @@ def log_user_info(update: Update, action: str, additional_info: str = ""):
     return user_info
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handles the /start command. Only advisors can use this command."""
+    """Handles the /start command for advisors only."""
     logger.debug("Processing /start command...")
     
     if not update.effective_user:
@@ -164,29 +156,23 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     user_info = log_user_info(update, "start_command_attempt")
     user_id = update.effective_user.id
-    chat_id = update.effective_chat.id if update.effective_chat else "unknown"
-
-    logger.debug(f"Start command from user {user_id} in chat {chat_id}")
 
     if user_id not in ADVISOR_USER_IDS:
-        logger.warning(f"✗ Non-advisor user {user_id} in chat {chat_id} attempted to use /start. Access denied.")
+        logger.warning(f"✗ Non-advisor user {user_id} attempted to use /start")
         log_user_info(update, "start_command_denied", "User not in advisor list")
-        await update.message.reply_text("Sorry, the /start command is only available to advisors.")
+        await update.message.reply_text("Sorry, this command is only available to advisors.")
         return
 
     global BOT_IS_ACTIVE
     old_status = BOT_IS_ACTIVE
     BOT_IS_ACTIVE = True
     
-    logger.info(f"✓ /start command executed by advisor {user_id}. Bot status changed: {old_status} -> {BOT_IS_ACTIVE} in chat {chat_id}")
+    logger.info(f"✓ /start command executed by advisor {user_id}. Status: {old_status} -> {BOT_IS_ACTIVE}")
     log_user_info(update, "start_command_success", f"Bot activated, previous_status={old_status}")
     
-    # Send confirmation to advisor
     await update.message.reply_text("✅ Bot is now active and will respond to student questions.")
-    logger.debug("Start command confirmation sent to advisor")
-
 async def stop_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handles the /stop command. Only advisors can use this command."""
+    """Handles the /stop command for advisors only."""
     logger.debug("Processing /stop command...")
     
     if not update.effective_user:
@@ -195,29 +181,24 @@ async def stop_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     user_info = log_user_info(update, "stop_command_attempt")
     user_id = update.effective_user.id
-    chat_id = update.effective_chat.id if update.effective_chat else "unknown"
-
-    logger.debug(f"Stop command from user {user_id} in chat {chat_id}")
 
     if user_id not in ADVISOR_USER_IDS:
-        logger.warning(f"✗ Non-advisor user {user_id} in chat {chat_id} attempted to use /stop. Access denied.")
+        logger.warning(f"✗ Non-advisor user {user_id} attempted to use /stop")
         log_user_info(update, "stop_command_denied", "User not in advisor list")
-        await update.message.reply_text("Sorry, the /stop command is only available to advisors.")
+        await update.message.reply_text("Sorry, this command is only available to advisors.")
         return
 
     global BOT_IS_ACTIVE
     old_status = BOT_IS_ACTIVE
     BOT_IS_ACTIVE = False
     
-    logger.info(f"✓ /stop command executed by advisor {user_id}. Bot status changed: {old_status} -> {BOT_IS_ACTIVE} in chat {chat_id}")
+    logger.info(f"✓ /stop command executed by advisor {user_id}. Status: {old_status} -> {BOT_IS_ACTIVE}")
     log_user_info(update, "stop_command_success", f"Bot deactivated, previous_status={old_status}")
     
-    # Send confirmation to advisor
     await update.message.reply_text("⏹️ Bot is now inactive and will not respond to student questions.")
-    logger.debug("Stop command confirmation sent to advisor")
 
 async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Shows the current bot status. Only available to advisors."""
+    """Shows the current bot status for advisors."""
     logger.debug("Processing /status command...")
     
     if not update.effective_user:
@@ -228,9 +209,9 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
 
     if user_id not in ADVISOR_USER_IDS:
-        logger.warning(f"✗ Non-advisor user {user_id} attempted to use /status. Access denied.")
+        logger.warning(f"✗ Non-advisor user {user_id} attempted to use /status")
         log_user_info(update, "status_command_denied", "User not in advisor list")
-        await update.message.reply_text("Sorry, the /status command is only available to advisors.")
+        await update.message.reply_text("Sorry, this command is only available to advisors.")
         return
 
     status = "🟢 Active" if BOT_IS_ACTIVE else "🔴 Inactive"
@@ -244,7 +225,7 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         'advisors_count': len(ADVISOR_USER_IDS)
     }
     
-    logger.info(f"✓ Status command executed by advisor {user_id}. Current status: {status_info}")
+    logger.info(f"✓ Status command executed by advisor {user_id}")
     log_user_info(update, "status_command_success", json.dumps(status_info))
     
     status_message = f"""
@@ -256,64 +237,29 @@ Advisors: {len(ADVISOR_USER_IDS)} configured
     """
     
     await update.message.reply_text(status_message, parse_mode='Markdown')
-    logger.debug("Status information sent to advisor")
-
 
 def sanitize_markdown(text: str) -> str:
-    """
-    Sanitize markdown text to prevent Telegram parsing errors.
-    This function fixes common markdown issues that cause parsing failures.
-    """
+    """Sanitize markdown text to prevent Telegram parsing errors."""
     if not text:
         return text
     
-    # Log the original text for debugging
     logger.debug(f"Sanitizing markdown text: '{text[:200]}{'...' if len(text) > 200 else ''}'")
     
-    # Fix unmatched asterisks (bold markers)
-    # Count asterisks and ensure they're paired
-    asterisk_count = text.count('*')
-    if asterisk_count % 2 != 0:
-        # If odd number of asterisks, escape the last one
-        last_asterisk_pos = text.rfind('*')
-        text = text[:last_asterisk_pos] + '\\*' + text[last_asterisk_pos + 1:]
-        logger.debug("Fixed unmatched asterisk")
+    # Fix unmatched markdown characters
+    for char in ['*', '_', '`']:
+        count = text.count(char)
+        if count % 2 != 0:
+            last_pos = text.rfind(char)
+            text = text[:last_pos] + '\\' + char + text[last_pos + 1:]
+            logger.debug(f"Fixed unmatched {char}")
     
-    # Fix unmatched underscores (italic markers)
-    underscore_count = text.count('_')
-    if underscore_count % 2 != 0:
-        # If odd number of underscores, escape the last one
-        last_underscore_pos = text.rfind('_')
-        text = text[:last_underscore_pos] + '\\_' + text[last_underscore_pos + 1:]
-        logger.debug("Fixed unmatched underscore")
-    
-    # Fix unmatched backticks (code markers)
-    # Handle both single backticks and triple backticks
-    single_backtick_count = len(re.findall(r'(?<!`)`(?!`)', text))
-    if single_backtick_count % 2 != 0:
-        # Escape unmatched single backticks
-        text = re.sub(r'(?<!`)`(?!`)', r'\\`', text)
-        logger.debug("Fixed unmatched single backticks")
-    
-    # Check for triple backticks (code blocks)
-    triple_backtick_count = text.count('```')
-    if triple_backtick_count % 2 != 0:
-        # If odd number of triple backticks, escape the last one
-        text = text[::-1].replace('```', '```\\', 1)[::-1]
-        logger.debug("Fixed unmatched triple backticks")
-    
-    # Fix unmatched square brackets (links)
-    open_bracket_count = text.count('[')
-    close_bracket_count = text.count(']')
-    if open_bracket_count != close_bracket_count:
-        # Escape unmatched brackets
+    # Fix unmatched square brackets
+    if text.count('[') != text.count(']'):
         text = text.replace('[', '\\[').replace(']', '\\]')
         logger.debug("Fixed unmatched square brackets")
     
-    # Remove or fix other problematic characters
-    # Escape special markdown characters that might cause issues
-    special_chars = ['>', '<', '&']
-    for char in special_chars:
+    # Escape other problematic characters
+    for char in ['>', '<', '&']:
         if char in text:
             text = text.replace(char, f'\\{char}')
     
@@ -321,48 +267,24 @@ def sanitize_markdown(text: str) -> str:
     return text
 
 def get_llm_response(user_message: str, user_id: int = None, chat_id: int = None) -> str:
-    """
-    Uses OpenAI to:
-    1. Determine if the user_message is a question.
-    2. If it's a question, answer it using FAQ_CONTENT.
-    3. If not a question, return NOT_A_QUESTION_MARKER.
-    4. If it's a question but cannot be answered from FAQ_CONTENT, return CANNOT_ANSWER_MARKER.
-    """
+    """Get response from OpenAI using FAQ content."""
     start_time = time.time()
-    logger.debug(f"Processing LLM request for user {user_id} in chat {chat_id}: '{user_message[:100]}{'...' if len(user_message) > 100 else ''}'")
+    logger.debug(f"Processing LLM request for user {user_id}: '{user_message[:100]}{'...' if len(user_message) > 100 else ''}'")
     
     if not client:
-        logger.error("✗ OpenAI client not initialized. Check OPENAI_API_KEY.")
+        logger.error("✗ OpenAI client not initialized")
         return CANNOT_ANSWER_MARKER
         
     if not FAQ_CONTENT: 
-        logger.warning("✗ FAQ_CONTENT is not available. Returning CANNOT_ANSWER_MARKER.")
+        logger.warning("✗ FAQ_CONTENT not available")
         return CANNOT_ANSWER_MARKER
         
-    system_prompt = f"""You are a helpful AI assistant for students. Your knowledge base consists ONLY of the following text:
-
---- BEGIN FAQ KNOWLEDGE BASE ---
+    system_prompt = f"""Your tasks:
+1. Analyze the user's message
+2. If NOT a question, respond with: {NOT_A_QUESTION_MARKER}
+3. If question but can't answer from FAQ, respond with: {CANNOT_ANSWER_MARKER}
+4. Otherwise, provide answer using ONLY this FAQ:
 {FAQ_CONTENT}
---- END FAQ KNOWLEDGE BASE ---
-
-Your tasks are:
-1. Analyze the user's message.
-2. First, determine if the user's message is a question seeking information OR if it's just a statement, greeting, chit-chat, or something that doesn't require an answer from the FAQ.
-   * If the message is NOT a question or does not require an answer from the FAQ (e.g., "hello", "thanks", "ok", "good morning", "lol that's funny"), respond with the exact string: {NOT_A_QUESTION_MARKER}
-3. If the message IS a question:
-   * Try to answer it comprehensively using ONLY the information from the FAQ KNOWLEDGE BASE provided above.
-   * If you can find a relevant answer in the FAQ KNOWLEDGE BASE, provide the answer directly. Do not refer to "the FAQ" in your answer, just provide the information as if you know it.
-   * If the message is a question, but you cannot find an answer within the FAQ KNOWLEDGE BASE, respond with the exact string: {CANNOT_ANSWER_MARKER}
-
-IMPORTANT: Your response must use valid Markdown formatting. Be careful with:
-- Asterisks (*) for bold - ensure they are paired
-- Underscores (_) for italic - ensure they are paired  
-- Backticks (`) for code - ensure they are paired
-- Square brackets ([]) and parentheses (()) for links - ensure proper syntax
-- Avoid using special characters like <, >, & unless properly escaped
-
-Do not use any external knowledge or information not present in the FAQ KNOWLEDGE BASE.
-Be concise and helpful, answer must be markdown formatted.
 """
     
     try:
@@ -380,96 +302,78 @@ Be concise and helpful, answer must be markdown formatted.
         response_text = completion.choices[0].message.content.strip()
         processing_time = time.time() - start_time
         
-        # Log the response details
         response_type = "not_question" if response_text == NOT_A_QUESTION_MARKER else \
                        "cannot_answer" if response_text == CANNOT_ANSWER_MARKER else \
                        "answered"
         
-        # ENHANCED LOGGING: Log the actual LLM response
-        logger.info(f"✓ LLM processed message from user {user_id}: '{user_message[:50]}{'...' if len(user_message) > 50 else ''}' -> {response_type} ({processing_time:.2f}s)")
+        logger.info(f"✓ LLM response: {response_type} ({processing_time:.2f}s)")
+        logger.debug(f"LLM response preview: '{response_text[:200]}{'...' if len(response_text) > 200 else ''}'")
         
-        # Log the full response for debugging (but truncate for readability)
-        if response_type == "answered":
-            logger.debug(f"LLM full response for user {user_id}: {repr(response_text)}")  # Use repr() to see special characters
-            logger.info(f"LLM response preview: '{response_text[:200]}{'...' if len(response_text) > 200 else ''}'")
-        else:
-            logger.debug(f"LLM response: {response_text}")
-        
-        # Log token usage if available
         if hasattr(completion, 'usage'):
-            logger.debug(f"Token usage - Prompt: {completion.usage.prompt_tokens}, Completion: {completion.usage.completion_tokens}, Total: {completion.usage.total_tokens}")
+            logger.debug(f"Token usage: Prompt={completion.usage.prompt_tokens}, Completion={completion.usage.completion_tokens}")
         
         return response_text
         
     except Exception as e:
-        processing_time = time.time() - start_time
-        logger.error(f"✗ Error calling OpenAI for user {user_id} after {processing_time:.2f}s: {e}")
+        logger.error(f"✗ Error calling OpenAI: {e}")
         return CANNOT_ANSWER_MARKER 
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handles incoming text messages."""
+    """Handles incoming text messages with enhanced typing status."""
     message_start_time = time.time()
-    logger.debug(f"Received message in handle_message: {update.message}")
     
-    # Safety checks
     if not update.message or not update.message.text:
-        logger.debug("Message ignored - no message or text content")
+        logger.debug("Message ignored - no text content")
         return
     
-    # Log basic message info
     user = update.effective_user
     chat = update.effective_chat
     message_text = update.message.text.strip()
+    chat_id = update.message.chat_id
     
-    logger.debug(f"Processing message from user {user.id if user else 'unknown'} in chat {chat.id if chat else 'unknown'}: '{message_text[:100]}{'...' if len(message_text) > 100 else ''}'")
+    logger.debug(f"Processing message from user {user.id if user else 'unknown'} in chat {chat_id}: '{message_text[:100]}{'...' if len(message_text) > 100 else ''}'")
     
-    # Advisor check is the very first thing
+    # Skip advisors
     if user and user.id in ADVISOR_USER_IDS:
-        logger.info(f"Message from advisor {user.id} (@{user.username}) ignored - advisors don't trigger bot responses")
+        logger.info(f"Message from advisor {user.id} ignored")
         log_user_info(update, "message_ignored", "User is advisor")
         return
 
-    # Check if bot is active
+    # Check bot status
     if not BOT_IS_ACTIVE:
-        logger.info(f"Bot is inactive. Ignoring message from user {user.id if user else 'unknown'} in chat {chat.id if chat else 'unknown'}")
+        logger.info("Bot inactive - ignoring message")
         log_user_info(update, "message_ignored", "Bot inactive")
         return
     
-    user_message = message_text
-    chat_id = update.message.chat_id
+    # Skip commands and empty messages
+    if message_text.startswith("/") or not message_text:
+        logger.debug(f"Ignoring {'command' if message_text.startswith('/') else 'empty'} message")
+        return
+
+    # Send typing status with enhanced logging
+    try:
+        logger.debug(f"Sending typing status to chat {chat_id}")
+        await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
+        logger.info("✓ Typing status sent successfully")
+    except Exception as e:
+        logger.error(f"✗ Failed to send typing status: {e}")
     
-    # Skip commands
-    if user_message.startswith("/"):
-        logger.debug(f"Ignoring command message: {user_message}")
-        log_user_info(update, "message_ignored", "Message is command")
-        return
-        
-    # Skip empty messages
-    if not user_message:
-        logger.debug("Ignoring empty message")
-        log_user_info(update, "message_ignored", "Empty message")
-        return
-
-    await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
-
-    # Log the actual message processing
-    log_user_info(update, "message_processing", f"Message: '{user_message[:200]}{'...' if len(user_message) > 200 else ''}'")
-    logger.info(f"Processing student message from user {user.id} (@{user.username}) in chat {chat_id}: '{user_message[:100]}{'...' if len(user_message) > 100 else ''}'")
+    log_user_info(update, "message_processing", f"Message: '{message_text[:200]}{'...' if len(message_text) > 200 else ''}'")
+    logger.info(f"Processing student message from user {user.id}: '{message_text[:100]}{'...' if len(message_text) > 100 else ''}'")
 
     try:
-        llm_answer = get_llm_response(user_message, user_id=user.id, chat_id=chat_id)
+        llm_answer = get_llm_response(message_text, user_id=user.id, chat_id=chat_id)
         processing_time = time.time() - message_start_time
         
         if llm_answer == NOT_A_QUESTION_MARKER:
-            logger.info(f"✓ Message identified as not a question from user {user.id}: '{user_message[:50]}{'...' if len(user_message) > 50 else ''}' ({processing_time:.2f}s)")
-            log_user_info(update, "message_not_question", f"Processing time: {processing_time:.2f}s")
+            logger.info(f"Message identified as not a question ({processing_time:.2f}s)")
             return
             
         elif llm_answer == CANNOT_ANSWER_MARKER or not llm_answer: 
-            logger.info(f"✗ Cannot answer question from user {user.id}: '{user_message[:50]}{'...' if len(user_message) > 50 else ''}' ({processing_time:.2f}s)")
+            logger.info(f"Cannot answer question ({processing_time:.2f}s)")
             log_user_info(update, "message_cannot_answer", f"Processing time: {processing_time:.2f}s")
         
-            # Notify moderator if configured
+            # Notify moderator
             if MODERATOR_CHAT_ID:
                 try:
                     logger.debug(f"Sending notification to moderator chat {MODERATOR_CHAT_ID}")
@@ -480,8 +384,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         f"❓ **Student Question Alert**\n"
                         f"**Chat:** {chat_title}\n"
                         f"**User:** {user.first_name} {user.last_name or ''} (@{user.username or 'no_username'})\n"
-                        f"**Question:** {user_message}\n"
-                        f"**Reason:** Bot couldn't find answer in FAQ\n"
+                        f"**Question:** {message_text}\n"
                         f"**Link:** {message_link}"
                     )
                     
@@ -490,38 +393,29 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         text=moderator_message,
                         parse_mode='Markdown'
                     )
-                    logger.info(f"✓ Moderator notification sent for unanswered question from user {user.id}")
+                    logger.info("✓ Moderator notification sent")
                     
                 except Exception as e:
-                    logger.error(f"✗ Failed to send message to moderator chat {MODERATOR_CHAT_ID}: {e}")
-            else:
-                logger.debug("No moderator chat configured - skipping notification")
-            
-            logger.debug(f"Cannot answer response sent to user {user.id}")
+                    logger.error(f"✗ Failed to notify moderator: {e}")
             
         else:
-            logger.info(f"✅ Successfully answered question from user {user.id}: '{user_message[:50]}{'...' if len(user_message) > 50 else ''}' ({processing_time:.2f}s)")
-            log_user_info(update, "message_answered", f"Processing time: {processing_time:.2f}s, Response length: {len(llm_answer)}")
+            logger.info(f"✅ Successfully answered question ({processing_time:.2f}s)")
+            log_user_info(update, "message_answered", f"Response length: {len(llm_answer)}")
             
-            # ENHANCED ERROR HANDLING: Sanitize markdown before sending
+            # Send response with markdown sanitization
             try:
-                # First attempt: try sending as-is
+                logger.debug("Attempting to send response with Markdown")
                 await update.message.reply_text(llm_answer, parse_mode='Markdown')
-                logger.debug(f"✓ Answer sent to user {user.id} with Markdown parsing, response length: {len(llm_answer)} characters")
-                
+                logger.debug("✓ Response sent with Markdown parsing")
             except Exception as markdown_error:
-                logger.warning(f"✗ Failed to send message with Markdown parsing to user {user.id}: {markdown_error}")
-                logger.debug(f"Problematic response was: {repr(llm_answer)}")
-                
-                # Second attempt: sanitize markdown
+                logger.warning(f"✗ Markdown error: {markdown_error}")
                 try:
-                    sanitized_answer = sanitize_markdown(llm_answer)
-                    await update.message.reply_text(sanitized_answer, parse_mode='Markdown')
-                    logger.info(f"✓ Answer sent to user {user.id} with sanitized Markdown after initial failure")
+                    sanitized = sanitize_markdown(llm_answer)
+                    await update.message.reply_text(sanitized, parse_mode='Markdown')
+                    logger.info("✓ Response sent with sanitized Markdown")
                     
-                except Exception as sanitized_error:
-                    logger.warning(f"✗ Failed to send sanitized Markdown to user {user.id}: {sanitized_error}")
-                    
+                except Exception as e:
+                    logger.error(f"✗ Failed to send sanitized response: {e}")
                     # Final fallback: send to moderator and inform user
                     try:
                         moderator_message = f"Failed to send the following answer to user {user.id} (username: {user.username}, name: {user.first_name} {user.last_name}). Please review and forward if appropriate.\\n\\nOriginal query: {update.message.text}\\n\\nLLM Answer:\\n{llm_answer}"
@@ -531,22 +425,70 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         # await update.message.reply_text("I encountered a technical issue trying to send you the answer. Your query has been forwarded to a moderator who will get back to you shortly.")
                         # logger.info(f"✓ User {user.id} informed about forwarding to moderator.")
                     except Exception as final_error:
-                        logger.error(f"✗ Complete failure to send any message to user {user.id} or moderator: {final_error}")
-                        
-            
+                        logger.error(f"✗ Complete failure to send any message to user {user.id} or moderator: {final_error}") 
+                    
     except Exception as e:
-        processing_time = time.time() - message_start_time
-        logger.error(f"✗ Error handling message from user {user.id if user else 'unknown'} after {processing_time:.2f}s: '{user_message[:50]}{'...' if len(user_message) > 50 else ''}': {e}")
-        log_user_info(update, "message_error", f"Error: {str(e)}, Processing time: {processing_time:.2f}s")
-        
-        try:
-            await update.message.reply_text("Sorry, I encountered an error processing your message. Please try again later.")
-            logger.debug("Error message sent to user")
-        except Exception as send_error:
-            logger.error(f"✗ Failed to send error message to user: {send_error}")
+        logger.error(f"✗ Error handling message: {e}")
+        log_user_info(update, "message_error", f"Error: {str(e)}")
+
+async def handle_reaction_downvote(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handles downvote reactions to delete messages with enhanced logging."""
+    logger.debug("Processing reaction update")
+    
+    if not update.message_reaction:
+        logger.debug("No message reaction found")
+        return
+
+    reaction = update.message_reaction
+    chat = reaction.chat
+    message_id = reaction.message_id
+    user = reaction.user
+    
+    if not user:
+        logger.debug("Reaction without user info")
+        return
+
+    user_id = user.id
+    logger.info(f"Reaction from user {user_id} in chat {chat.id} for message {message_id}")
+
+    # Only advisors can trigger deletion
+    if user_id not in ADVISOR_USER_IDS:
+        logger.debug(f"Non-advisor user {user_id} reaction ignored")
+        log_user_info(update, "reaction_ignored", "Non-advisor user")
+        return
+
+    # Check for new thumbs down reaction
+    downvote_emoji = "👎"
+    is_new_downvote = False
+    
+    if reaction.new_reaction:
+        for rtype in reaction.new_reaction:
+            if isinstance(rtype, ReactionTypeEmoji) and rtype.emoji == downvote_emoji:
+                is_new_downvote = True
+                break
+    
+    if not is_new_downvote:
+        logger.debug("Reaction was not a new thumbs down")
+        return
+
+    # Skip deletion in moderator chat
+    if MODERATOR_CHAT_ID and str(chat.id) == MODERATOR_CHAT_ID:
+        logger.info(f"Skipping deletion in moderator chat {chat.id}")
+        log_user_info(update, "downvote_skipped", "Moderator chat")
+        return
+
+    # Delete message
+    try:
+        logger.debug(f"Attempting to delete message {message_id} in chat {chat.id}")
+        await context.bot.delete_message(chat_id=chat.id, message_id=message_id)
+        logger.info(f"✓ Message {message_id} deleted successfully in chat {chat.id}")
+        log_user_info(update, "message_deleted", f"Message {message_id} by advisor {user_id}")
+    except Exception as e:
+        logger.error(f"✗ Failed to delete message: {e}")
+        log_user_info(update, "delete_failed", f"Error: {str(e)}")
 
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Log errors caused by updates."""
+    """Enhanced error logging."""
     error_info = {
         'error': str(context.error),
         'error_type': type(context.error).__name__,
@@ -554,111 +496,41 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> N
         'timestamp': datetime.now().isoformat()
     }
     
-    logger.error(f"✗ Exception while handling an update: {context.error}")
+    logger.error(f"✗ Exception: {context.error}")
     logger.debug(f"Error details: {json.dumps(error_info, ensure_ascii=False)}")
     
-    # Try to extract user info if possible
-    if hasattr(update, 'effective_user') and update.effective_user:
-        logger.error(f"Error occurred for user {update.effective_user.id} (@{update.effective_user.username})")
+    if update and update.effective_user:
+        logger.error(f"Error occurred for user {update.effective_user.id}")
 
-async def handle_reaction_downvote(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handles downvote reactions from advisors to delete messages, primarily in student chats."""
-    logger.debug(f"Processing reaction update: {update}")
-
-    if not update.message_reaction:
-        logger.debug("No message reaction found in update, skipping.")
-        return
-
-    chat = update.message_reaction.chat
-    message_id = update.message_reaction.message_id
-    reacting_user = update.message_reaction.user
-
-    if not reacting_user:
-        logger.debug("No user found in reaction (perhaps a channel reaction without user info?), skipping.")
-        return
-
-    reacting_user_id = reacting_user.id
-
-    # Rule 1: Only advisors can trigger this.
-    if reacting_user_id not in ADVISOR_USER_IDS:
-        logger.debug(f"Reaction from non-advisor user {reacting_user_id} in chat {chat.id}. Skipping.")
-        return
-
-    logger.info(f"Reaction from advisor {reacting_user_id} ('{reacting_user.username or reacting_user.first_name}') in chat {chat.id} (name: '{chat.title or 'DM'}') for message {message_id}.")
-
-    # Rule 2: Check if it's a new "thumbs down" reaction.
-    downvote_emoji = "👎"
-    is_new_downvote = False
-    if update.message_reaction.new_reaction:
-        for reaction_type in update.message_reaction.new_reaction:
-            if isinstance(reaction_type, ReactionTypeEmoji) and reaction_type.emoji == downvote_emoji:
-                is_new_downvote = True
-                break
-    
-    if not is_new_downvote:
-        # This also covers cases where a downvote was removed, as new_reaction would be empty or different.
-        logger.debug(f"Reaction from advisor {reacting_user_id} in chat {chat.id} was not a new downvote. New reactions: {update.message_reaction.new_reaction}")
-        return
-
-    # At this point, an advisor has added a "👎" reaction.
-
-    # Rule 3: Determine if we should delete the message based on the chat.
-    # MODERATOR_CHAT_ID is loaded globally.
-    # We want to delete in student/group chats, but NOT in the dedicated MODERATOR_CHAT_ID.
-    if MODERATOR_CHAT_ID and str(chat.id) == MODERATOR_CHAT_ID:
-        logger.info(f"Advisor {reacting_user_id} downvoted message {message_id} in the MODERATOR_CHAT_ID ({chat.id}). Deletion is intentionally skipped for this specific chat.")
-        # log_user_info uses update.effective_user which is correctly populated for reactions.
-        log_user_info(update, "advisor_downvote_moderator_chat_skipped", f"Advisor {reacting_user_id} downvoted msg {message_id} in moderator chat {chat.id}. Deletion intentionally skipped.")
-    else:
-        # This is a non-moderator chat (e.g., student group chat) OR MODERATOR_CHAT_ID is not configured.
-        # Proceed with deletion.
-        logger.info(f"Advisor {reacting_user_id} downvoted message {message_id} in chat {chat.id}. Proceeding with deletion as it's not the configured MODERATOR_CHAT_ID.")
-        try:
-            await context.bot.delete_message(chat_id=chat.id, message_id=message_id)
-            logger.info(f"✓ Successfully deleted message {message_id} in chat {chat.id} due to downvote by advisor {reacting_user_id}.")
-            log_user_info(update, "advisor_downvote_deleted_message", f"Advisor {reacting_user_id} deleted message {message_id} in chat {chat.id}")
-        except Exception as e:
-            logger.error(f"✗ Failed to delete message {message_id} in chat {chat.id} after downvote by advisor {reacting_user_id}: {e}")
-            # Optionally, notify advisor if deletion failed if they have DMs open with bot.
-            # For now, just logging the error.
-
-# Webhook handler
 async def webhook_handler(request):
-    """Handle incoming webhook requests."""
+    """Handle incoming webhook requests with detailed logging."""
     request_start_time = time.time()
     client_ip = request.remote
     
-    logger.debug(f"Webhook request received from {client_ip}")
+    logger.debug(f"Webhook request from {client_ip}")
     
     try:
-        # Get the JSON data from the request
         data = await request.json()
-        logger.debug(f"Webhook data received: {json.dumps(data, ensure_ascii=False)[:500]}{'...' if len(str(data)) > 500 else ''}")
+        logger.debug(f"Webhook data: {json.dumps(data, ensure_ascii=False)[:500]}{'...' if len(str(data)) > 500 else ''}")
         
-        # Create Update object from the webhook data
         update = Update.de_json(data, application.bot)
-        
         if update:
-            logger.debug(f"Processing webhook update: {update}")
-            # Process the update through the application
+            logger.debug(f"Processing update: {update}")
             await application.process_update(update)
             processing_time = time.time() - request_start_time
-            logger.info(f"✓ Webhook processed successfully in {processing_time:.2f}s from {client_ip}")
+            logger.info(f"✓ Webhook processed in {processing_time:.2f}s")
         else:
-            logger.warning(f"✗ Failed to create Update object from webhook data from {client_ip}")
+            logger.warning("✗ Failed to create Update object")
         
         return web.Response(status=200)
         
     except Exception as e:
-        processing_time = time.time() - request_start_time
-        logger.error(f"✗ Error processing webhook from {client_ip} after {processing_time:.2f}s: {e}")
+        logger.error(f"✗ Webhook error: {e}")
         return web.Response(status=500)
 
 async def health_check(request):
-    """Health check endpoint."""
-    client_ip = request.remote
-    logger.debug(f"Health check request from {client_ip}")
-    
+    """Health check endpoint with status logging."""
+    logger.debug("Health check request")
     health_status = {
         'status': 'healthy',
         'bot_active': BOT_IS_ACTIVE,
@@ -666,179 +538,100 @@ async def health_check(request):
         'openai_connected': bool(client),
         'timestamp': datetime.now().isoformat()
     }
-    
-    logger.debug(f"Health check response: {health_status}")
+    logger.debug(f"Health status: {health_status}")
     return web.Response(text="OK", status=200)
 
-async def setup_webhook():
-    """Set up the webhook with Telegram."""
-    if not WEBHOOK_DOMAIN:
-        logger.info("No webhook domain configured - webhook setup skipped")
-        return
-        
-    webhook_url = f"https://{WEBHOOK_DOMAIN.rstrip('/')}/{WEBHOOK_URL_PATH.lstrip('/')}"
-    logger.info(f"Setting up webhook: {webhook_url}")
-    
-    try:
-        await application.bot.set_webhook(
-            url=webhook_url,
-            allowed_updates=Update.ALL_TYPES
-        )
-        logger.info(f"✓ Webhook set successfully: {webhook_url}")
-        
-        # Get webhook info for logging
-        webhook_info = await application.bot.get_webhook_info()
-        logger.debug(f"Webhook info: URL={webhook_info.url}, pending_updates={webhook_info.pending_update_count}")
-        
-    except Exception as e:
-        logger.error(f"✗ Failed to set webhook: {e}")
-
 async def main():
-    """Main function to start the bot."""
+    """Main function to start the bot with enhanced initialization logging."""
     global application
+    logger.info("=== Bot Initialization ===")
     
-    logger.info("=== Bot Initialization Starting ===")
-    
-    # Validate required environment variables
-    validation_errors = []
-    
+    # Validate configuration
     if not TELEGRAM_TOKEN:
-        validation_errors.append("TELEGRAM_BOT_TOKEN not set")
+        logger.critical("✗ TELEGRAM_BOT_TOKEN missing - cannot start")
+        return
     if not OPENAI_API_KEY:
-        validation_errors.append("OPENAI_API_KEY not set")
-    if not FAQ_CONTENT:
-        validation_errors.append("FAQ content is missing (check faq.md)")
-    if not ADVISOR_USER_IDS:
-        validation_errors.append("No advisor user IDs configured (bot commands will not work)")
-    
-    if validation_errors:
-        for error in validation_errors:
-            logger.error(f"✗ {error}")
-        if not TELEGRAM_TOKEN or not OPENAI_API_KEY or not FAQ_CONTENT:
-            logger.critical("Critical configuration missing. Bot cannot start.")
-            return
-        else:
-            logger.warning("Non-critical configuration issues detected. Bot starting with limited functionality.")
+        logger.warning("✗ OPENAI_API_KEY missing - limited functionality")
 
-    logger.info("✓ Configuration validation passed")
-
-    # Create application
-    logger.debug("Creating Telegram application...")
+    logger.info("Creating Telegram application...")
     application = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
-    logger.info("✓ Telegram application created")
+    logger.info("✓ Application created")
 
-    # Add handlers
-    logger.debug("Adding command and message handlers...")
+    # Add handlers with enhanced logging
+    logger.debug("Registering command handlers")
     application.add_handler(CommandHandler("start", start_command))
     application.add_handler(CommandHandler("stop", stop_command))
     application.add_handler(CommandHandler("status", status_command))
+    
+    logger.debug("Registering message handler")
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-    application.add_handler(MessageHandler(filters.REACTION, handle_reaction_downvote))
+    
+    logger.debug("Registering reaction handler")
+    application.add_handler(MessageReactionHandler(handle_reaction_downvote))
+    
+    logger.debug("Registering error handler")
     application.add_error_handler(error_handler)
-    logger.info("✓ All handlers added successfully")
+    logger.info("✓ All handlers registered")
 
     # Initialize application
-    logger.debug("Initializing Telegram application...")
+    logger.debug("Initializing application...")
     await application.initialize()
     await application.start()
-    logger.info("✓ Telegram application initialized and started")
+    logger.info("✓ Application started")
 
-    # Send restart notification to advisors
-    logger.info("Attempting to send restart notification to advisors...")
-    restart_message = "✅ Bot has restarted and is now active by default."
-
-    if WEBHOOK_DOMAIN:
-        restart_message += " (Mode: Webhook)"
-    else:
-        restart_message += " (Mode: Polling)"
-
-    notification_delivered = False
-
-    # Try MODERATOR_CHAT_ID first if available
-    if MODERATOR_CHAT_ID:
-        try:
-            logger.debug(f"Sending restart notification to MODERATOR_CHAT_ID: {MODERATOR_CHAT_ID}")
-            await application.bot.send_message(
-                chat_id=MODERATOR_CHAT_ID,
-                text=restart_message,
-                parse_mode='Markdown'
-            )
-            logger.info(f"✓ Restart notification successfully sent to MODERATOR_CHAT_ID: {MODERATOR_CHAT_ID}")
-            notification_delivered = True
-        except Exception as e:
-            logger.error(f"✗ Failed to send restart notification to MODERATOR_CHAT_ID ({MODERATOR_CHAT_ID}): {e}. Will attempt individual advisors if configured.")
-
-    # If not sent via MODERATOR_CHAT_ID (either not configured or failed) AND individual advisors are configured
-    if not notification_delivered and ADVISOR_USER_IDS:
-        logger.info(f"Attempting to send restart notification to {len(ADVISOR_USER_IDS)} individual advisor(s) as MODERATOR_CHAT_ID was not used or failed.")
-        success_ids = []
-        failure_details = {} 
+    # Send restart notification
+    if ADVISOR_USER_IDS:
+        restart_msg = "✅ Bot restarted and active" + (" (Webhook)" if WEBHOOK_DOMAIN else " (Polling)")
+        success_count = 0
+        
         for advisor_id in ADVISOR_USER_IDS:
             try:
-                logger.debug(f"Sending restart notification to individual advisor: {advisor_id}")
-                await application.bot.send_message(
-                    chat_id=advisor_id,
-                    text=restart_message,
-                    parse_mode='Markdown'
-                )
-                success_ids.append(str(advisor_id))
+                await application.bot.send_message(chat_id=advisor_id, text=restart_msg)
+                success_count += 1
+                logger.debug(f"Restart notification sent to {advisor_id}")
             except Exception as e:
-                logger.error(f"✗ Failed to send restart notification to advisor {advisor_id}: {e}")
-                failure_details[str(advisor_id)] = str(e)
+                logger.error(f"✗ Failed to notify {advisor_id}: {e}")
         
-        if success_ids:
-            logger.info(f"✓ Restart notification sent to {len(success_ids)} individual advisor(s): {', '.join(success_ids)}")
-            notification_delivered = True 
-        if failure_details:
-            logger.warning(f"✗ Failed to send restart notification to some individual advisors: {failure_details}")
+        logger.info(f"Restart notifications sent: {success_count}/{len(ADVISOR_USER_IDS)}")
 
-    if notification_delivered:
-        logger.info("Restart notification process completed.")
-    else:
-        logger.warning("✗ Restart notification could not be delivered to any configured advisor channel or individual.")
-
+    # Start in webhook or polling mode
     if WEBHOOK_DOMAIN:
-        # Webhook mode
-        logger.info("=== Starting Bot in Webhook Mode ===")
+        logger.info("=== Starting in Webhook Mode ===")
         logger.info(f"Webhook URL: https://{WEBHOOK_DOMAIN}/{WEBHOOK_URL_PATH}")
-        logger.info(f"Listening on {WEBHOOK_LISTEN_IP}:{WEBHOOK_PORT}")
         
         # Set up webhook
-        await setup_webhook()
+        try:
+            webhook_url = f"https://{WEBHOOK_DOMAIN.rstrip('/')}/{WEBHOOK_URL_PATH.lstrip('/')}"
+            await application.bot.set_webhook(webhook_url)
+            logger.info(f"✓ Webhook set: {webhook_url}")
+        except Exception as e:
+            logger.error(f"✗ Webhook setup failed: {e}")
+            return
         
-        # Create web application
-        logger.debug("Creating web application for webhook...")
+        # Create web server
         app = web.Application()
         app.router.add_post(f"/{WEBHOOK_URL_PATH}", webhook_handler)
         app.router.add_get("/health", health_check)
         
-        # Start web server
-        logger.debug("Starting web server...")
         runner = web.AppRunner(app)
         await runner.setup()
-        
         site = web.TCPSite(runner, WEBHOOK_LISTEN_IP, WEBHOOK_PORT)
         await site.start()
+        logger.info(f"✓ Web server started on {WEBHOOK_LISTEN_IP}:{WEBHOOK_PORT}")
         
-        logger.info("✅ Webhook server started successfully")
-        logger.info("Bot is running in webhook mode.")
-        
-        # Keep the server running
-        try:
-            while True:
-                await asyncio.sleep(3600)  # Sleep for 1 hour, then check again
-                logger.debug("Webhook server heartbeat - still running")
-        except KeyboardInterrupt:
-            logger.info("Received shutdown signal...")
-        finally:
-            logger.info("Cleaning up webhook server...")
-            await runner.cleanup()
-            await application.stop()
+        # Run indefinitely
+        while True:
+            await asyncio.sleep(3600)
     else:
-        # Polling mode
-        logger.info("=== Starting Bot in Polling Mode ===")
-        logger.info("Bot is running in polling mode.")
-        await application.run_polling(allowed_updates=Update.ALL_TYPES)
+        logger.info("=== Starting in Polling Mode ===")
+        await application.run_polling()
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        logger.info("Shutdown signal received")
+    except Exception as e:
+        logger.critical(f"Fatal error: {e}")
+    finally:
+        logger.info("=== Bot Shutdown Complete ===")
