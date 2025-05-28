@@ -1,4 +1,5 @@
 import os
+import sys
 import logging
 import asyncio
 import json
@@ -35,7 +36,7 @@ def setup_logging():
 
 
 # Initialize logging
-logger, interaction_logger = setup_logging()
+logger = setup_logging()
 
 load_dotenv()
 logger.info("=== Bot Starting Up ===")
@@ -122,7 +123,7 @@ def log_user_info(update: Update, action: str, additional_info: str = ""):
         'additional_info': additional_info
     }
     
-    interaction_logger.info(f"USER_ACTION: {json.dumps(user_info, ensure_ascii=False)}")
+    logger.info(f"USER_ACTION: {json.dumps(user_info, ensure_ascii=False)}")
     return user_info
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
