@@ -288,7 +288,7 @@ def get_llm_response(user_message: str, user_id: int = None, chat_id: int = None
 Instructions:
 1. If the user's message is not a question (e.g., greetings, statements), respond with: {NOT_A_QUESTION_MARKER}
 2. If the message is a question:
-   - Answer it comprehensively using only the information from the FAQ above, combining relevant parts if necessary.
+   - Answer briefly and clearly using only the FAQ (use bullet points if necessary), combining relevant parts if necessary.
    - Do not mention the FAQ in your answer.
    - If the question cannot be answered with the FAQ, respond with: {CANNOT_ANSWER_MARKER}
 
