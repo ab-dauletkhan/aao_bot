@@ -130,7 +130,7 @@ CANNOT_ANSWER_MARKER = "[CANNOT_ANSWER]"
 logger.debug(f"Special markers configured: NOT_A_QUESTION='{NOT_A_QUESTION_MARKER}', CANNOT_ANSWER='{CANNOT_ANSWER_MARKER}'")
 
 # State variables
-BOT_IS_ACTIVE = False
+BOT_IS_ACTIVE = True
 application = None  # Global reference for cleanup
 
 def log_user_info(update: Update, action: str, additional_info: str = ""):
