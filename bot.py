@@ -12,48 +12,27 @@ from telegram.constants import ChatAction
 from openai import OpenAI
 from dotenv import load_dotenv
 
-# Enhanced logging configuration
+
 def setup_logging():
-    """Set up comprehensive logging with multiple handlers."""
-    os.makedirs('logs', exist_ok=True)
-    
-    detailed_formatter = logging.Formatter(
+    """Set up logging that outputs everything to stdout."""
+    formatter = logging.Formatter(
         '%(asctime)s - %(name)s - %(levelname)s - [%(filename)s:%(lineno)d] - %(funcName)s() - %(message)s'
     )
-    simple_formatter = logging.Formatter(
-        '%(asctime)s - %(levelname)s - %(message)s'
-    )
-    
+
     root_logger = logging.getLogger()
     root_logger.setLevel(logging.DEBUG)
-    
-    # Console handler
-    console_handler = logging.StreamHandler()
-    console_handler.setLevel(logging.INFO)
-    console_handler.setFormatter(simple_formatter)
-    root_logger.addHandler(console_handler)
-    
-    # File handlers
-    file_handler = logging.FileHandler('logs/bot_debug.log', encoding='utf-8')
-    file_handler.setLevel(logging.DEBUG)
-    file_handler.setFormatter(detailed_formatter)
-    root_logger.addHandler(file_handler)
-    
-    error_handler = logging.FileHandler('logs/bot_errors.log', encoding='utf-8')
-    error_handler.setLevel(logging.ERROR)
-    error_handler.setFormatter(detailed_formatter)
-    root_logger.addHandler(error_handler)
-    
-    interaction_handler = logging.FileHandler('logs/user_interactions.log', encoding='utf-8')
-    interaction_handler.setLevel(logging.INFO)
-    interaction_handler.setFormatter(detailed_formatter)
-    
-    interaction_logger = logging.getLogger('user_interactions')
-    interaction_logger.addHandler(interaction_handler)
-    interaction_logger.setLevel(logging.INFO)
-    interaction_logger.propagate = False
-    
-    return logging.getLogger(__name__), interaction_logger
+
+    # Clear any existing handlers
+    root_logger.handlers.clear()
+
+    handler = logging.StreamHandler(sys.stdout)
+    handler.setLevel(logging.DEBUG)
+    handler.setFormatter(formatter)
+
+    root_logger.addHandler(handler)
+
+    return logging.getLogger(__name__)
+
 
 # Initialize logging
 logger, interaction_logger = setup_logging()
