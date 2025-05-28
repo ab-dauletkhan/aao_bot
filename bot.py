@@ -293,7 +293,7 @@ Your tasks are:
    * If the message is a question, but you cannot find an answer within the FAQ KNOWLEDGE BASE, respond with the exact string: {CANNOT_ANSWER_MARKER}
 
 Do not use any external knowledge or information not present in the FAQ KNOWLEDGE BASE.
-Be concise and helpful.
+Be concise and helpful, answer must be markdown formatted.
 """
     
     try:
@@ -425,7 +425,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             logger.info(f"✅ Successfully answered question from user {user.id}: '{user_message[:50]}{'...' if len(user_message) > 50 else ''}' ({processing_time:.2f}s)")
             log_user_info(update, "message_answered", f"Processing time: {processing_time:.2f}s, Response length: {len(llm_answer)}")
             
-            await update.message.reply_text(llm_answer)
+            await update.message.reply_text(llm_answer, parse_mode='Markdown')
             logger.debug(f"Answer sent to user {user.id}, response length: {len(llm_answer)} characters")
             
     except Exception as e:
