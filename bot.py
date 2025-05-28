@@ -585,7 +585,8 @@ async def main():
     logger.debug("Initializing application...")
     await application.initialize()
     await application.start()
-    logger.info("✓ Application started")
+    application.updater.allowed_updates = ["message", "message_reaction"]
+    logger.info("✓ Application started with message_reaction updates enabled")
 
     # Send restart notification
     if ADVISOR_USER_IDS:
@@ -610,7 +611,7 @@ async def main():
         # Set up webhook
         try:
             webhook_url = f"https://{WEBHOOK_DOMAIN.rstrip('/')}/{WEBHOOK_URL_PATH.lstrip('/')}"
-            await application.bot.set_webhook(webhook_url)
+            await application.bot.set_webhook(webhook_url, allowed_updates=["message", "message_reaction"])
             logger.info(f"✓ Webhook set: {webhook_url}")
         except Exception as e:
             logger.error(f"✗ Webhook setup failed: {e}")
@@ -632,7 +633,7 @@ async def main():
             await asyncio.sleep(3600)
     else:
         logger.info("=== Starting in Polling Mode ===")
-        await application.run_polling()
+        await application.run_polling(allowed_updates=["message", "message_reaction"])
 
 if __name__ == "__main__":
     try:
