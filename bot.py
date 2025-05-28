@@ -421,7 +421,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             else:
                 logger.debug("No moderator chat configured - skipping notification")
             
-            await update.message.reply_text(reply_text)
             logger.debug(f"Cannot answer response sent to user {user.id}")
             
         else:
