@@ -83,7 +83,7 @@ if ADVISOR_USER_IDS_STR:
 
 # Webhook settings
 WEBHOOK_LISTEN_IP = os.getenv("WEBHOOK_LISTEN_IP", "0.0.0.0")
-WEBHOOK_PORT = int(os.getenv("PORT", os.getenv("WEBHOOK_PORT", "8080")))
+WEBHOOK_PORT = int(os.getenv("PORT", os.getenv("WEBHOOK_PORT", "8443")))
 WEBHOOK_URL_PATH = os.getenv("WEBHOOK_URL_PATH", TELEGRAM_TOKEN)
 WEBHOOK_DOMAIN = os.getenv("WEBHOOK_DOMAIN")
 
