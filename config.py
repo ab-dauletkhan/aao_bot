@@ -15,8 +15,8 @@ ADVISOR_USER_IDS = (
 # Webhook settings
 WEBHOOK_LISTEN_IP = os.getenv("WEBHOOK_LISTEN_IP", "0.0.0.0")
 WEBHOOK_PORT = int(os.getenv("PORT", os.getenv("WEBHOOK_PORT", "8443")))
-WEBHOOK_URL_PATH = os.getenv("WEBHOOK_URL_PATH", TELEGRAM_TOKEN or "")
-WEBHOOK_DOMAIN = os.getenv("WEBHOOK_DOMAIN")
+WEBHOOK_URL_PATH = os.getenv("WEBHOOK_URL_PATH", "")
+WEBHOOK_DOMAIN = os.getenv("WEBHOOK_DOMAIN", "")
 
 # Special markers
 NOT_A_QUESTION_MARKER = "[NOT_A_QUESTION]"

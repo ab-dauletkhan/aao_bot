@@ -14,7 +14,7 @@ from config import (
     WEBHOOK_PORT,
     ADVISOR_USER_IDS,
 )
-from logger_config import setup_logging
+from log_setup import setup_logging
 from handlers.commands import start_command, stop_command, status_command
 from handlers.messages import handle_message
 from handlers.reactions import handle_reaction_downvote
@@ -24,7 +24,78 @@ from loguru import logger
 from aiohttp import web
 
 
-async def main():
+async def send_restart_notifications(application):
+    """Send restart notifications to advisors."""
+    if not ADVISOR_USER_IDS:
+        return
+
+    restart_msg = "✅ Bot restarted and active"
+    success_count = 0
+
+    for advisor_id in ADVISOR_USER_IDS:
+        try:
+            await application.bot.send_message(chat_id=advisor_id, text=restart_msg)
+            success_count += 1
+            logger.debug(
+                "Restart notification sent", extra={"advisor_id": advisor_id}
+            )
+        except Exception as e:
+            logger.exception(
+                "Failed to notify advisor",
+                extra={"advisor_id": advisor_id, "error": str(e)},
+            )
+
+    logger.info(
+        "Restart notifications",
+        extra={"successful": success_count, "total": len(ADVISOR_USER_IDS)},
+    )
+
+
+async def setup_webhook_mode(application):
+    """Setup webhook mode."""
+    logger.info("Starting in Webhook Mode", extra={"phase": "webhook"})
+    webhook_url = (
+        f"https://{WEBHOOK_DOMAIN.rstrip('/')}/{WEBHOOK_URL_PATH.lstrip('/')}"
+    )
+    logger.info("Webhook URL set", extra={"url": webhook_url})
+
+    try:
+        await application.bot.set_webhook(
+            webhook_url, allowed_updates=["message", "message_reaction"]
+        )
+        logger.info("Webhook set", extra={"url": webhook_url})
+    except Exception as e:
+        logger.exception("Webhook setup failed", extra={"error": str(e)})
+        return
+
+    app = web.Application()
+    app["application"] = application
+    app.router.add_post(f"/{WEBHOOK_URL_PATH}", create_webhook_handler(application))
+    app.router.add_get("/health", health_check)
+
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, WEBHOOK_LISTEN_IP, WEBHOOK_PORT)
+    await site.start()
+    logger.info(
+        "Web server started", extra={"ip": WEBHOOK_LISTEN_IP, "port": WEBHOOK_PORT}
+    )
+
+    try:
+        while True:
+            await asyncio.sleep(3600)
+    except KeyboardInterrupt:
+        logger.info("Shutdown signal received", extra={"phase": "shutdown"})
+    finally:
+        await runner.cleanup()
+
+
+async def post_init(application):
+    """Post-initialization tasks."""
+    await send_restart_notifications(application)
+
+
+def main():
     """Main function to start the bot."""
     setup_logging()
     logger.info("=== Bot Initialization ===", extra={"phase": "init"})
@@ -38,7 +109,7 @@ async def main():
         )
 
     logger.info("Creating Telegram application...")
-    application = ApplicationBuilder().token(TELEGRAM_TOKEN).build()  # type: ignore
+    application = ApplicationBuilder().token(TELEGRAM_TOKEN).post_init(post_init).build()
     application.bot_data["BOT_IS_ACTIVE"] = True
 
     logger.debug("Registering handlers")
@@ -52,65 +123,9 @@ async def main():
     application.add_error_handler(error_handler)
     logger.info("All handlers registered")
 
-    await application.initialize()
-    await application.start()
-    logger.info("Application started")
-
-    if ADVISOR_USER_IDS:
-        restart_msg = "✅ Bot restarted and active" + (
-            " (Webhook)" if WEBHOOK_DOMAIN else " (Polling)"
-        )
-        success_count = 0
-
-        for advisor_id in ADVISOR_USER_IDS:
-            try:
-                await application.bot.send_message(chat_id=advisor_id, text=restart_msg)
-                success_count += 1
-                logger.debug(
-                    "Restart notification sent", extra={"advisor_id": advisor_id}
-                )
-            except Exception as e:
-                logger.exception(
-                    "Failed to notify advisor",
-                    extra={"advisor_id": advisor_id, "error": str(e)},
-                )
-
-        logger.info(
-            "Restart notifications",
-            extra={"successful": success_count, "total": len(ADVISOR_USER_IDS)},
-        )
-
     if WEBHOOK_DOMAIN and WEBHOOK_URL_PATH:
         logger.info("Starting in Webhook Mode", extra={"phase": "webhook"})
-        webhook_url = (
-            f"https://{WEBHOOK_DOMAIN.rstrip('/')}/{WEBHOOK_URL_PATH.lstrip('/')}"
-        )
-        logger.info("Webhook URL set", extra={"url": webhook_url})
-
-        try:
-            await application.bot.set_webhook(
-                webhook_url, allowed_updates=["message", "message_reaction"]
-            )
-            logger.info("Webhook set", extra={"url": webhook_url})
-        except Exception as e:
-            logger.exception("Webhook setup failed", extra={"error": str(e)})
-            return
-
-        app = web.Application()
-        app["application"] = application
-        app.router.add_post(f"/{WEBHOOK_URL_PATH}", create_webhook_handler(application))
-        app.router.add_get("/health", health_check)
-
-        runner = web.AppRunner(app)
-        await runner.setup()
-        site = web.TCPSite(runner, WEBHOOK_LISTEN_IP, WEBHOOK_PORT)
-        await site.start()
-        logger.info(
-            "Web server started", extra={"ip": WEBHOOK_LISTEN_IP, "port": WEBHOOK_PORT}
-        )
-
-        while True:
-            await asyncio.sleep(3600)
+        asyncio.run(setup_webhook_mode(application))
     else:
         logger.info("Starting in Polling Mode", extra={"phase": "polling"})
         application.run_polling(allowed_updates=["message", "message_reaction"])
@@ -118,7 +133,7 @@ async def main():
 
 if __name__ == "__main__":
     try:
-        asyncio.run(main())
+        main()
     except KeyboardInterrupt:
         logger.info("Shutdown signal received", extra={"phase": "shutdown"})
     except Exception as e:
