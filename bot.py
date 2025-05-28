@@ -390,9 +390,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         elif llm_answer == CANNOT_ANSWER_MARKER or not llm_answer: 
             logger.info(f"✗ Cannot answer question from user {user.id}: '{user_message[:50]}{'...' if len(user_message) > 50 else ''}' ({processing_time:.2f}s)")
             log_user_info(update, "message_cannot_answer", f"Processing time: {processing_time:.2f}s")
-            
-            reply_text = f"I'm not sure how to answer that. {ADVISOR_TAG}, could you please help?"
-            
+        
             # Notify moderator if configured
             if MODERATOR_CHAT_ID:
                 try:
@@ -577,6 +575,60 @@ async def main():
     await application.start()
     logger.info("✓ Telegram application initialized and started")
 
+    # Send restart notification to advisors
+    logger.info("Attempting to send restart notification to advisors...")
+    restart_message = "✅ Bot has restarted and is now active by default."
+
+    if WEBHOOK_DOMAIN:
+        restart_message += " (Mode: Webhook)"
+    else:
+        restart_message += " (Mode: Polling)"
+
+    notification_delivered = False
+
+    # Try MODERATOR_CHAT_ID first if available
+    if MODERATOR_CHAT_ID:
+        try:
+            logger.debug(f"Sending restart notification to MODERATOR_CHAT_ID: {MODERATOR_CHAT_ID}")
+            await application.bot.send_message(
+                chat_id=MODERATOR_CHAT_ID,
+                text=restart_message,
+                parse_mode='Markdown'
+            )
+            logger.info(f"✓ Restart notification successfully sent to MODERATOR_CHAT_ID: {MODERATOR_CHAT_ID}")
+            notification_delivered = True
+        except Exception as e:
+            logger.error(f"✗ Failed to send restart notification to MODERATOR_CHAT_ID ({MODERATOR_CHAT_ID}): {e}. Will attempt individual advisors if configured.")
+
+    # If not sent via MODERATOR_CHAT_ID (either not configured or failed) AND individual advisors are configured
+    if not notification_delivered and ADVISOR_USER_IDS:
+        logger.info(f"Attempting to send restart notification to {len(ADVISOR_USER_IDS)} individual advisor(s) as MODERATOR_CHAT_ID was not used or failed.")
+        success_ids = []
+        failure_details = {} 
+        for advisor_id in ADVISOR_USER_IDS:
+            try:
+                logger.debug(f"Sending restart notification to individual advisor: {advisor_id}")
+                await application.bot.send_message(
+                    chat_id=advisor_id,
+                    text=restart_message,
+                    parse_mode='Markdown'
+                )
+                success_ids.append(str(advisor_id))
+            except Exception as e:
+                logger.error(f"✗ Failed to send restart notification to advisor {advisor_id}: {e}")
+                failure_details[str(advisor_id)] = str(e)
+        
+        if success_ids:
+            logger.info(f"✓ Restart notification sent to {len(success_ids)} individual advisor(s): {', '.join(success_ids)}")
+            notification_delivered = True 
+        if failure_details:
+            logger.warning(f"✗ Failed to send restart notification to some individual advisors: {failure_details}")
+
+    if notification_delivered:
+        logger.info("Restart notification process completed.")
+    else:
+        logger.warning("✗ Restart notification could not be delivered to any configured advisor channel or individual.")
+
     if WEBHOOK_DOMAIN:
         # Webhook mode
         logger.info("=== Starting Bot in Webhook Mode ===")
@@ -601,7 +653,7 @@ async def main():
         await site.start()
         
         logger.info("✅ Webhook server started successfully")
-        logger.info(f"Bot is ready! Status: {'Active' if BOT_IS_ACTIVE else 'Inactive (use /start to activate)'}")
+        logger.info("Bot is running in webhook mode.")
         
         # Keep the server running
         try:
@@ -614,6 +666,11 @@ async def main():
             logger.info("Cleaning up webhook server...")
             await runner.cleanup()
             await application.stop()
+    else:
+        # Polling mode
+        logger.info("=== Starting Bot in Polling Mode ===")
+        logger.info("Bot is running in polling mode.")
+        await application.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == "__main__":
     asyncio.run(main())
