@@ -6,6 +6,7 @@ from config import (
     ADVISOR_USER_IDS,
     NOT_A_QUESTION_MARKER,
     CANNOT_ANSWER_MARKER,
+    GROUP_CHAT_IDS,
 )
 from openai_client import get_llm_response
 from utils import log_user_info, sanitize_markdown
@@ -13,52 +14,43 @@ from loguru import logger
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handles incoming text messages with enhanced typing status."""
-    # Try to get chat_id early for logging, default to "unknown_chat" if not available
-    early_chat_id = "unknown_chat"
-    if update and update.effective_chat:
-        early_chat_id = update.effective_chat.id
+    if not _is_valid_message(update):
+        return
 
-    with logger.contextualize(chat_id=early_chat_id):
-        if not _is_valid_message(update): # This log will now have early_chat_id
-            return
+    if not update.message or not update.message.text:
+        return
 
-        if not update.message or not update.message.text:
-            # This path should ideally not be hit if _is_valid_message works correctly
-            logger.warning("Message or text is missing after _is_valid_message check")
-            return
+    message_text = update.message.text.strip()
+    user = update.effective_user
+    chat = update.effective_chat
 
-        message_text = update.message.text.strip()
-        user = update.effective_user
-        chat = update.effective_chat # chat is now guaranteed by _is_valid_message
+    if not chat:
+        return
 
-        # At this point, chat and chat.id are guaranteed to be available.
-        # Re-contextualize with the definite chat_id if it was unknown initially.
-        # If early_chat_id was already set, this just re-affirms it.
-        with logger.contextualize(chat_id=chat.id):
-            _log_message_processing(user, chat.id, message_text)
+    chat_id = chat.id
 
-            if _should_ignore_message(update, context, message_text, chat.id):
-                return
+    _log_message_processing(user, chat_id, message_text)
 
-            await _send_typing_indicator(context.bot, chat.id)
+    if _should_ignore_message(user, context, message_text, chat_id):
+        return
 
-            log_user_info(
-                update,
-                "message_processing",
-                {"message": message_text[:200] + ("..." if len(message_text) > 200 else "")},
-            ) # log_user_info also sets context
+    await _send_typing_indicator(context.bot, chat_id)
 
-            try:
-                await _process_llm_response(update, context, message_text, user, chat)
-            except Exception as e:
-                logger.exception("Error handling message", extra={"error": str(e)}) # This will have chat.id
-                # log_user_info also sets context, potentially overriding if called after this logger.exception
-                log_user_info(update, "message_error", {"error": str(e)})
+    log_user_info(
+        update,
+        "message_processing",
+        {"message": message_text[:200] + ("..." if len(message_text) > 200 else "")},
+    )
+
+    try:
+        await _process_llm_response(update, context, message_text, user, chat)
+    except Exception as e:
+        logger.exception("Error handling message", extra={"error": str(e)})
+        log_user_info(update, "message_error", {"error": str(e)})
 
 
 def _is_valid_message(update: Update) -> bool:
     """Check if the message has all required attributes."""
-    # chat_id will be in context from handle_message
     if (
         not update.message
         or not update.message.text
@@ -72,7 +64,6 @@ def _is_valid_message(update: Update) -> bool:
 
 def _log_message_processing(user, chat_id: int, message_text: str):
     """Log message processing details."""
-    # chat_id is passed as param and also in context
     logger.debug(
         "Processing message",
         extra={
@@ -84,20 +75,25 @@ def _log_message_processing(user, chat_id: int, message_text: str):
     )
 
 
-def _should_ignore_message(update:Update, context, message_text: str, chat_id: int) -> bool:
+def _should_ignore_message(user, context, message_text: str, chat_id: int) -> bool:
     """Determine if message should be ignored."""
-    # chat_id is passed as param and also in context
-    user = update.effective_user
+    if GROUP_CHAT_IDS and chat_id not in GROUP_CHAT_IDS:
+        logger.info(
+            "Message from an unauthorized group chat ignored",
+            extra={"chat_id": chat_id, "user_id": user.id},
+        )
+        return True
+
     if user.id in ADVISOR_USER_IDS:
-        logger.info("Message from advisor ignored", extra={"user_id": user.id}) # chat_id from context
+        logger.info("Message from advisor ignored", extra={"user_id": user.id})
         return True
 
     if not context.bot_data.get("BOT_IS_ACTIVE", True):
-        logger.info("Bot inactive", extra={"reason": "Ignoring message"}) # chat_id from context
+        logger.info("Bot inactive", extra={"reason": "Ignoring message"})
         return True
 
     if message_text.startswith("/") or not message_text:
-        logger.debug("Ignoring message", extra={"reason": "Command or empty message"}) # chat_id from context
+        logger.debug("Ignoring message", extra={"reason": "Command or empty message"})
         return True
 
     return False
@@ -105,22 +101,20 @@ def _should_ignore_message(update:Update, context, message_text: str, chat_id: i
 
 async def _send_typing_indicator(bot, chat_id: int):
     """Send typing indicator to chat."""
-    # chat_id is passed as param and also in context
     try:
         logger.debug("Sending typing status", extra={"chat_id": chat_id})
         await bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
         logger.info("Typing status sent", extra={"chat_id": chat_id})
     except Exception as e:
-        logger.exception("Failed to send typing status", extra={"error": str(e)}) # chat_id from context
+        logger.exception("Failed to send typing status", extra={"error": str(e)})
 
 
 async def _process_llm_response(update: Update, context, message_text: str, user, chat):
     """Process the LLM response and handle different response types."""
-    # chat_id from context (set in handle_message, and get_llm_response also uses its own)
     llm_answer = get_llm_response(message_text, user_id=user.id, chat_id=chat.id)
 
     if llm_answer == NOT_A_QUESTION_MARKER:
-        logger.info("Message not a question", extra={"user_id": user.id}) # chat_id from context
+        logger.info("Message not a question", extra={"user_id": user.id})
         return
 
     if llm_answer == CANNOT_ANSWER_MARKER or not llm_answer:
@@ -132,9 +126,8 @@ async def _process_llm_response(update: Update, context, message_text: str, user
 
 async def _handle_unanswerable_question(update: Update, context, message_text: str, user, chat):
     """Handle questions that cannot be answered."""
-    # chat_id from context
-    logger.info("Cannot answer question", extra={"user_id": user.id}) # chat_id from context
-    log_user_info(update, "message_cannot_answer") # log_user_info also sets context
+    logger.info("Cannot answer question", extra={"user_id": user.id})
+    log_user_info(update, "message_cannot_answer")
 
     if MODERATOR_CHAT_ID:
         await _notify_moderator_about_question(context.bot, update, message_text, user, chat)
@@ -142,7 +135,6 @@ async def _handle_unanswerable_question(update: Update, context, message_text: s
 
 async def _notify_moderator_about_question(bot, update: Update, message_text: str, user, chat):
     """Notify moderator about unanswerable question."""
-    # chat_id from context (original user's chat), specific log for moderator uses MODERATOR_CHAT_ID
     try:
         chat_title = chat.title if chat.title else f"Chat {chat.id}"
         if not update.message:
@@ -162,18 +154,17 @@ async def _notify_moderator_about_question(bot, update: Update, message_text: st
             text=moderator_message,
             parse_mode="Markdown",
         )
-        logger.info("Moderator notification sent", extra={"chat_id": MODERATOR_CHAT_ID}) # Explicitly MODERATOR_CHAT_ID
+        logger.info("Moderator notification sent", extra={"chat_id": MODERATOR_CHAT_ID})
     except Exception as e:
-        logger.exception("Failed to notify moderator", extra={"error": str(e)}) # Original user chat_id from context
+        logger.exception("Failed to notify moderator", extra={"error": str(e)})
 
 
 async def _handle_successful_answer(update: Update, context, llm_answer: str, user, chat, message_text: str):
     """Handle successful LLM answers."""
-    # chat_id from context
     logger.info(
         "Question answered",
         extra={"user_id": user.id, "response_length": len(llm_answer)},
-    ) # chat_id from context
+    )
     log_user_info(update, "message_answered", {"response_length": len(llm_answer)})
 
     success = await _try_send_response(update, llm_answer)
@@ -183,7 +174,6 @@ async def _handle_successful_answer(update: Update, context, llm_answer: str, us
 
 async def _try_send_response(update: Update, llm_answer: str) -> bool:
     """Try to send response with markdown, fallback to sanitized markdown."""
-    # chat_id from context
     if not update.message:
         return False
 
@@ -192,24 +182,23 @@ async def _try_send_response(update: Update, llm_answer: str) -> bool:
 
     try:
         await update.message.reply_text(llm_answer, parse_mode="Markdown")
-        logger.debug("Response sent with Markdown", extra={"chat_id": update.effective_chat.id}) # Explicitly chat.id
+        logger.debug("Response sent with Markdown", extra={"chat_id": update.effective_chat.id})
         return True
     except Exception as markdown_error:
-        logger.warning("Markdown error", extra={"error": str(markdown_error)}) # chat_id from context
+        logger.warning("Markdown error", extra={"error": str(markdown_error)})
 
         try:
             sanitized = sanitize_markdown(llm_answer)
             await update.message.reply_text(sanitized, parse_mode="Markdown")
-            logger.info("Response sent with sanitized Markdown", extra={"chat_id": update.effective_chat.id}) # Explicitly chat.id
+            logger.info("Response sent with sanitized Markdown", extra={"chat_id": update.effective_chat.id})
             return True
         except Exception as e:
-            logger.exception("Failed to send sanitized response", extra={"error": str(e)}) # chat_id from context
+            logger.exception("Failed to send sanitized response", extra={"error": str(e)})
             return False
 
 
 async def _handle_failed_response(bot, llm_answer: str, user, message_text: str):
     """Handle cases where response couldn't be sent to user."""
-    # chat_id from context (original user's chat), specific log for moderator uses MODERATOR_CHAT_ID
     if not MODERATOR_CHAT_ID:
         return
 
@@ -221,9 +210,9 @@ async def _handle_failed_response(bot, llm_answer: str, user, message_text: str)
             f"Original query: {message_text}\n\nLLM Answer:\n{llm_answer}"
         )
         await bot.send_message(chat_id=MODERATOR_CHAT_ID, text=moderator_message)
-        logger.info("Sent to moderator", extra={"chat_id": MODERATOR_CHAT_ID}) # Explicitly MODERATOR_CHAT_ID
+        logger.info("Sent to moderator", extra={"chat_id": MODERATOR_CHAT_ID})
     except Exception as final_error:
-        logger.exception("Failed to notify moderator", extra={"error": str(final_error)}) # Original user chat_id from context
+        logger.exception("Failed to notify moderator", extra={"error": str(final_error)})
 
 
 def _build_message_link(chat_id: int, message_id: int) -> str:

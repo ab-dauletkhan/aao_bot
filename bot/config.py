@@ -11,6 +11,10 @@ ADVISOR_USER_IDS_STR = os.getenv("ADVISOR_USER_IDS", "")
 ADVISOR_USER_IDS = (
     set(map(int, ADVISOR_USER_IDS_STR.split(","))) if ADVISOR_USER_IDS_STR else set()
 )
+GROUP_CHAT_IDS_STR = os.getenv("GROUP_CHAT_IDS", "")
+GROUP_CHAT_IDS = (
+    set(map(int, GROUP_CHAT_IDS_STR.split(","))) if GROUP_CHAT_IDS_STR else set()
+)
 
 # Webhook settings
 WEBHOOK_LISTEN_IP = os.getenv("WEBHOOK_LISTEN_IP", "0.0.0.0")

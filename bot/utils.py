@@ -42,21 +42,18 @@ def log_user_info(
     user = update.effective_user
     chat = update.effective_chat
 
-    chat_id_to_log = chat.id if chat else "unknown_chat"
-    # Bind chat_id for all subsequent logs in this context
-    with logger.contextualize(chat_id=chat_id_to_log):
-        user_info = {
-            "user_id": user.id if user else "unknown",
-            "username": user.username if user else "unknown",
-            "first_name": user.first_name if user else "unknown",
-            "last_name": user.last_name if user else "unknown",
-            "chat_id": chat_id_to_log, # Keep it in extra as well for the specific USER_ACTION log
-            "chat_type": chat.type if chat else "unknown",
-            "chat_title": getattr(chat, "title", "private") if chat else "unknown",
-            "action": action,
-            "timestamp": __import__("datetime").datetime.now().isoformat(),
-        }
-        user_info.update(additional_info)
+    user_info = {
+        "user_id": user.id if user else "unknown",
+        "username": user.username if user else "unknown",
+        "first_name": user.first_name if user else "unknown",
+        "last_name": user.last_name if user else "unknown",
+        "chat_id": chat.id if chat else "unknown",
+        "chat_type": chat.type if chat else "unknown",
+        "chat_title": getattr(chat, "title", "private") if chat else "unknown",
+        "action": action,
+        "timestamp": __import__("datetime").datetime.now().isoformat(),
+    }
+    user_info.update(additional_info)
 
-        logger.info("USER_ACTION", extra=user_info)
-        return user_info
+    logger.info("USER_ACTION", extra=user_info)
+    return user_info

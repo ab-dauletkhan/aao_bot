@@ -9,7 +9,7 @@ def setup_logging() -> None:
     logger.add(
         sys.stdout,
         level="DEBUG",
-        format="{time:YYYY-MM-DD HH:mm:ss} | {level: <8} | {extra[chat_id]} | {name}:{line} - {message}",
+        format="{time:YYYY-MM-DD HH:mm:ss} | {level: <8} | {name}:{line} - {message}",
         colorize=True,
     )
 
@@ -20,7 +20,7 @@ def setup_logging() -> None:
         level="DEBUG",
         compression="zip",
         serialize=False,
-        format="{time:YYYY-MM-DD HH:mm:ss} | {level: <8} | {extra[chat_id]} | {name}:{line} - {message}",
+        format="{time:YYYY-MM-DD HH:mm:ss} | {level: <8} | {name}:{line} - {message}",
     )
 
     logger.add(
@@ -29,5 +29,5 @@ def setup_logging() -> None:
         retention="7 days",
         level="INFO",
         serialize=True,
-        format="{time:YYYY-MM-DD HH:mm:ss} | {level: <8} | {extra[chat_id]} | {name}:{line} - {message}",
+        format="{time:YYYY-MM-DD HH:mm:ss} | {level: <8} | {name}:{line} - {message}",
     )
