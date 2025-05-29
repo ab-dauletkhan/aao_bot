@@ -5,8 +5,8 @@ from datetime import datetime
 import time
 import json
 
-from .config import FAQ_CONTENT
-from .openai_client import client
+from bot.config import FAQ_CONTENT
+from bot.openai_client import client
 
 
 def create_webhook_handler(application):

@@ -3,7 +3,7 @@ from openai.types.chat import (
     ChatCompletionUserMessageParam,
     ChatCompletionSystemMessageParam,
 )
-from .config import (
+from bot.config import (
     OPENAI_API_KEY,
     FAQ_CONTENT,
     NOT_A_QUESTION_MARKER,

@@ -1,7 +1,7 @@
 from telegram.ext import ContextTypes
 from telegram import Update
-from ..config import ADVISOR_USER_IDS
-from ..utils import log_user_info, log_with_context
+from bot.config import ADVISOR_USER_IDS
+from bot.utils import log_user_info, log_with_context
 from loguru import logger
 
 
@@ -117,15 +117,15 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Enhanced status collection
     status_info = {
         "bot_active": context.bot_data.get("BOT_IS_ACTIVE", True),
-        "faq_loaded": bool(__import__("config").FAQ_CONTENT),
-        "faq_length": len(__import__("config").FAQ_CONTENT)
-        if __import__("config").FAQ_CONTENT
+        "faq_loaded": bool(__import__("bot.config").FAQ_CONTENT),
+        "faq_length": len(__import__("bot.config").FAQ_CONTENT)
+        if __import__("bot.config").FAQ_CONTENT
         else 0,
-        "openai_connected": bool(__import__("openai_client").client),
+        "openai_connected": bool(__import__("bot.openai_client").client),
         "advisors_count": len(ADVISOR_USER_IDS),
-        "moderator_configured": bool(__import__("config").MODERATOR_CHAT_ID),
-        "group_chats_configured": len(__import__("config").GROUP_CHAT_IDS)
-        if __import__("config").GROUP_CHAT_IDS
+        "moderator_configured": bool(__import__("bot.config").MODERATOR_CHAT_ID),
+        "group_chats_configured": len(__import__("bot.config").GROUP_CHAT_IDS)
+        if __import__("bot.config").GROUP_CHAT_IDS
         else 0,
     }
 

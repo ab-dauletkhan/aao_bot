@@ -1,15 +1,15 @@
 from telegram.ext import ContextTypes
 from telegram import Update
 from telegram.constants import ChatAction
-from ..config import (
+from bot.config import (
     MODERATOR_CHAT_ID,
     ADVISOR_USER_IDS,
     NOT_A_QUESTION_MARKER,
     CANNOT_ANSWER_MARKER,
     GROUP_CHAT_IDS,
 )
-from ..openai_client import get_llm_response
-from ..utils import log_user_info, sanitize_markdown, log_with_context, get_user_context
+from bot.openai_client import get_llm_response
+from bot.utils import log_user_info, sanitize_markdown, log_with_context, get_user_context
 from loguru import logger
 from typing import Optional
 

@@ -16,6 +16,10 @@ GROUP_CHAT_IDS = (
     set(map(int, GROUP_CHAT_IDS_STR.split(","))) if GROUP_CHAT_IDS_STR else set()
 )
 
+# Logging credentials
+LOGTAIL_SOURCE_TOKEN = os.environ.get("LOGTAIL_SOURCE_TOKEN")
+LOGTAIL_HOST = os.environ.get("LOGTAIL_HOST", "")
+
 # Webhook settings
 WEBHOOK_LISTEN_IP = os.getenv("WEBHOOK_LISTEN_IP", "0.0.0.0")
 WEBHOOK_PORT = int(os.getenv("PORT", os.getenv("WEBHOOK_PORT", "8443")))

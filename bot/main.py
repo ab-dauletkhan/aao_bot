@@ -6,7 +6,7 @@ from telegram.ext import (
     filters,
     MessageReactionHandler,
 )
-from .config import (
+from bot.config import (
     TELEGRAM_TOKEN,
     WEBHOOK_DOMAIN,
     WEBHOOK_URL_PATH,
@@ -14,12 +14,12 @@ from .config import (
     WEBHOOK_PORT,
     ADVISOR_USER_IDS,
 )
-from .log_setup import setup_logging
-from .handlers.commands import start_command, stop_command, status_command
-from .handlers.messages import handle_message
-from .handlers.reactions import handle_reaction_downvote
-from .handlers.errors import error_handler
-from .webhook import create_webhook_handler, health_check
+from bot.log_setup import setup_logging
+from bot.handlers.commands import start_command, stop_command, status_command
+from bot.handlers.messages import handle_message
+from bot.handlers.reactions import handle_reaction_downvote
+from bot.handlers.errors import error_handler
+from bot.webhook import create_webhook_handler, health_check
 from loguru import logger
 from aiohttp import web
 
@@ -108,7 +108,7 @@ async def main_webhook():
     if not TELEGRAM_TOKEN:
         logger.critical("Missing TELEGRAM_BOT_TOKEN", extra={"error": "Cannot start"})
         return
-    if not __import__("config").OPENAI_API_KEY:
+    if not __import__("bot.config").OPENAI_API_KEY:
         logger.warning(
             "Missing OPENAI_API_KEY", extra={"warning": "Limited functionality"}
         )
@@ -141,7 +141,7 @@ def main_polling():
     if not TELEGRAM_TOKEN:
         logger.critical("Missing TELEGRAM_BOT_TOKEN", extra={"error": "Cannot start"})
         return
-    if not __import__("config").OPENAI_API_KEY:
+    if not __import__("bot.config").OPENAI_API_KEY:
         logger.warning(
             "Missing OPENAI_API_KEY", extra={"warning": "Limited functionality"}
         )

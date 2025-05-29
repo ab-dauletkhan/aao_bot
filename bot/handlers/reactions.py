@@ -1,8 +1,8 @@
 from telegram.ext import ContextTypes
 from telegram import Update, ReactionTypeEmoji
 from loguru import logger
-from ..config import ADVISOR_USER_IDS, MODERATOR_CHAT_ID
-from ..utils import log_user_info, log_with_context
+from bot.config import ADVISOR_USER_IDS, MODERATOR_CHAT_ID
+from bot.utils import log_user_info, log_with_context
 
 
 async def handle_reaction_downvote(update: Update, context: ContextTypes.DEFAULT_TYPE):
