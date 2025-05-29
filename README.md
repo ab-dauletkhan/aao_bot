@@ -65,6 +65,7 @@ TELEGRAM_BOT_TOKEN=your_telegram_bot_token_here
 OPENAI_API_KEY=your_openai_api_key_here
 MODERATOR_CHAT_ID=your_moderator_chat_id
 ADVISOR_USER_IDS=123456789,987654321
+GROUP_CHAT_IDS=-100123456789,-100987654321
 
 # Production webhook settings (optional)
 WEBHOOK_DOMAIN=https://yourdomain.com
@@ -123,6 +124,7 @@ Advisors have special privileges to control the bot:
 | `OPENAI_API_KEY` | ❌ No | OpenAI API key for AI responses | `sk-proj-...` |
 | `MODERATOR_CHAT_ID` | ❌ No | Chat ID for moderation alerts | `-1001234567890` |
 | `ADVISOR_USER_IDS` | ❌ No | Comma-separated advisor user IDs | `123456,789012` |
+| `GROUP_CHAT_IDS` | ❌ No | Comma-separated group chat IDs where the bot should operate. If not set, the bot will respond in all chats. | `-1001234567890,-100987654321` |
 | `WEBHOOK_DOMAIN` | ❌ No | Domain for webhook mode | `https://bot.example.com` |
 | `WEBHOOK_URL_PATH` | ❌ No | Webhook URL path | `/webhook/secret` |
 

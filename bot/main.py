@@ -6,7 +6,7 @@ from telegram.ext import (
     filters,
     MessageReactionHandler,
 )
-from config import (
+from .config import (
     TELEGRAM_TOKEN,
     WEBHOOK_DOMAIN,
     WEBHOOK_URL_PATH,
@@ -14,12 +14,12 @@ from config import (
     WEBHOOK_PORT,
     ADVISOR_USER_IDS,
 )
-from log_setup import setup_logging
-from handlers.commands import start_command, stop_command, status_command
-from handlers.messages import handle_message
-from handlers.reactions import handle_reaction_downvote
-from handlers.errors import error_handler
-from webhook import create_webhook_handler, health_check
+from .log_setup import setup_logging
+from .handlers.commands import start_command, stop_command, status_command
+from .handlers.messages import handle_message
+from .handlers.reactions import handle_reaction_downvote
+from .handlers.errors import error_handler
+from .webhook import create_webhook_handler, health_check
 from loguru import logger
 from aiohttp import web
 
@@ -36,9 +36,7 @@ async def send_restart_notifications(application):
         try:
             await application.bot.send_message(chat_id=advisor_id, text=restart_msg)
             success_count += 1
-            logger.debug(
-                "Restart notification sent", extra={"advisor_id": advisor_id}
-            )
+            logger.debug("Restart notification sent", extra={"advisor_id": advisor_id})
         except Exception as e:
             logger.exception(
                 "Failed to notify advisor",
@@ -59,9 +57,7 @@ async def setup_webhook_mode(application):
     await application.initialize()
     await application.start()
 
-    webhook_url = (
-        f"https://{WEBHOOK_DOMAIN.rstrip('/')}/{WEBHOOK_URL_PATH.lstrip('/')}"
-    )
+    webhook_url = f"https://{WEBHOOK_DOMAIN.rstrip('/')}/{WEBHOOK_URL_PATH.lstrip('/')}"
     logger.info("Webhook URL set", extra={"url": webhook_url})
 
     try:
@@ -118,7 +114,9 @@ async def main_webhook():
         )
 
     logger.info("Creating Telegram application...")
-    application = ApplicationBuilder().token(TELEGRAM_TOKEN).post_init(post_init).build()
+    application = (
+        ApplicationBuilder().token(TELEGRAM_TOKEN).post_init(post_init).build()  # type: ignore
+    )
     application.bot_data["BOT_IS_ACTIVE"] = True
 
     logger.debug("Registering handlers")
@@ -149,7 +147,9 @@ def main_polling():
         )
 
     logger.info("Creating Telegram application...")
-    application = ApplicationBuilder().token(TELEGRAM_TOKEN).post_init(post_init).build()
+    application = (
+        ApplicationBuilder().token(TELEGRAM_TOKEN).post_init(post_init).build()  # type: ignore
+    )
     application.bot_data["BOT_IS_ACTIVE"] = True
 
     logger.debug("Registering handlers")

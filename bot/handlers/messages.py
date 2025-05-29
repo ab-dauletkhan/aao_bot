@@ -1,19 +1,21 @@
 from telegram.ext import ContextTypes
 from telegram import Update
 from telegram.constants import ChatAction
-from config import (
+from ..config import (
     MODERATOR_CHAT_ID,
     ADVISOR_USER_IDS,
     NOT_A_QUESTION_MARKER,
     CANNOT_ANSWER_MARKER,
     GROUP_CHAT_IDS,
 )
-from openai_client import get_llm_response
-from utils import log_user_info, sanitize_markdown
+from ..openai_client import get_llm_response
+from ..utils import log_user_info, sanitize_markdown, log_with_context, get_user_context
 from loguru import logger
+from typing import Optional
+
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handles incoming text messages with enhanced typing status."""
+    """Handles incoming text messages with enhanced typing status and logging."""
     if not _is_valid_message(update):
         return
 
@@ -29,12 +31,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     chat_id = chat.id
 
-    _log_message_processing(user, chat_id, message_text)
+    _log_message_processing(update, message_text)
 
-    if _should_ignore_message(user, context, message_text, chat_id):
+    if _should_ignore_message(update, context, message_text, chat_id):
         return
 
-    await _send_typing_indicator(context.bot, chat_id)
+    await _send_typing_indicator(context.bot, chat_id, update)
 
     log_user_info(
         update,
@@ -45,8 +47,14 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         await _process_llm_response(update, context, message_text, user, chat)
     except Exception as e:
-        logger.exception("Error handling message", extra={"error": str(e)})
-        log_user_info(update, "message_error", {"error": str(e)})
+        log_with_context(
+            update,
+            "error",
+            "Error handling message",
+            {"error": str(e), "error_type": type(e).__name__},
+        )
+        # Ensure moderator is notified about processing errors
+        await _handle_processing_error(update, context, message_text, e)
 
 
 def _is_valid_message(update: Update) -> bool:
@@ -57,96 +65,163 @@ def _is_valid_message(update: Update) -> bool:
         or not update.effective_user
         or not update.effective_chat
     ):
-        logger.debug("Message ignored", extra={"reason": "Missing required attributes"})
+        if update.effective_user and update.effective_chat:
+            log_with_context(
+                update, "debug", "Message ignored - missing required attributes"
+            )
+        else:
+            logger.debug(
+                "Message ignored", extra={"reason": "Missing required attributes"}
+            )
         return False
     return True
 
 
-def _log_message_processing(user, chat_id: int, message_text: str):
-    """Log message processing details."""
-    logger.debug(
+def _log_message_processing(update: Update, message_text: str):
+    """Log message processing details with enhanced context."""
+    log_with_context(
+        update,
+        "debug",
         "Processing message",
-        extra={
-            "user_id": user.id,
-            "chat_id": chat_id,
+        {
+            "message_length": len(message_text),
             "message_preview": message_text[:100]
             + ("..." if len(message_text) > 100 else ""),
         },
     )
 
 
-def _should_ignore_message(user, context, message_text: str, chat_id: int) -> bool:
+def _should_ignore_message(
+    update: Update, context, message_text: str, chat_id: int
+) -> bool:
     """Determine if message should be ignored."""
+    user = update.effective_user
+
     if GROUP_CHAT_IDS and chat_id not in GROUP_CHAT_IDS:
-        logger.info(
-            "Message from an unauthorized group chat ignored",
-            extra={"chat_id": chat_id, "user_id": user.id},
+        log_with_context(
+            update,
+            "info",
+            "Message from unauthorized group chat ignored",
+            {"authorized_groups": len(GROUP_CHAT_IDS)},
         )
         return True
 
-    if user.id in ADVISOR_USER_IDS:
-        logger.info("Message from advisor ignored", extra={"user_id": user.id})
+    if user and user.id in ADVISOR_USER_IDS:
+        log_with_context(update, "info", "Message from advisor ignored")
         return True
 
     if not context.bot_data.get("BOT_IS_ACTIVE", True):
-        logger.info("Bot inactive", extra={"reason": "Ignoring message"})
+        log_with_context(update, "info", "Bot inactive - message ignored")
         return True
 
     if message_text.startswith("/") or not message_text:
-        logger.debug("Ignoring message", extra={"reason": "Command or empty message"})
+        log_with_context(
+            update,
+            "debug",
+            "Command or empty message ignored",
+            {"is_command": message_text.startswith("/")},
+        )
         return True
 
     return False
 
 
-async def _send_typing_indicator(bot, chat_id: int):
-    """Send typing indicator to chat."""
+async def _send_typing_indicator(bot, chat_id: int, update: Update):
+    """Send typing indicator to chat with enhanced logging."""
     try:
-        logger.debug("Sending typing status", extra={"chat_id": chat_id})
+        log_with_context(update, "debug", "Sending typing indicator")
         await bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
-        logger.info("Typing status sent", extra={"chat_id": chat_id})
+        log_with_context(update, "debug", "Typing indicator sent successfully")
     except Exception as e:
-        logger.exception("Failed to send typing status", extra={"error": str(e)})
+        log_with_context(
+            update, "warning", "Failed to send typing indicator", {"error": str(e)}
+        )
 
 
 async def _process_llm_response(update: Update, context, message_text: str, user, chat):
-    """Process the LLM response and handle different response types."""
-    llm_answer = get_llm_response(message_text, user_id=user.id, chat_id=chat.id)
+    """Process the LLM response and handle different response types with enhanced error handling."""
+    try:
+        log_with_context(update, "debug", "Requesting LLM response")
+        llm_answer = get_llm_response(message_text, user_id=user.id, chat_id=chat.id)
 
-    if llm_answer == NOT_A_QUESTION_MARKER:
-        logger.info("Message not a question", extra={"user_id": user.id})
-        return
+        # Enhanced response validation
+        if not llm_answer or llm_answer.strip() == "":
+            log_with_context(update, "warning", "LLM returned empty response")
+            llm_answer = CANNOT_ANSWER_MARKER
 
-    if llm_answer == CANNOT_ANSWER_MARKER or not llm_answer:
-        await _handle_unanswerable_question(update, context, message_text, user, chat)
-        return
+        if llm_answer == NOT_A_QUESTION_MARKER:
+            log_with_context(update, "info", "Message identified as not a question")
+            return
 
-    await _handle_successful_answer(update, context, llm_answer, user, chat, message_text)
+        if llm_answer == CANNOT_ANSWER_MARKER:
+            log_with_context(update, "info", "LLM cannot answer question")
+            await _handle_unanswerable_question(
+                update, context, message_text, user, chat
+            )
+            return
+
+        await _handle_successful_answer(
+            update, context, llm_answer, user, chat, message_text
+        )
+
+    except Exception as e:
+        log_with_context(
+            update,
+            "error",
+            "Error in LLM processing",
+            {"error": str(e), "error_type": type(e).__name__},
+        )
+        # Treat LLM processing errors as unanswerable questions
+        await _handle_unanswerable_question(
+            update, context, message_text, user, chat, processing_error=str(e)
+        )
 
 
-async def _handle_unanswerable_question(update: Update, context, message_text: str, user, chat):
-    """Handle questions that cannot be answered."""
-    logger.info("Cannot answer question", extra={"user_id": user.id})
-    log_user_info(update, "message_cannot_answer")
+async def _handle_unanswerable_question(
+    update: Update,
+    context,
+    message_text: str,
+    user,
+    chat,
+    processing_error: Optional[str] = None,
+):
+    """Handle questions that cannot be answered with enhanced error context."""
+    error_context = {"processing_error": processing_error} if processing_error else {}
+    log_with_context(update, "info", "Cannot answer question", error_context)
+    log_user_info(update, "message_cannot_answer", error_context)
 
     if MODERATOR_CHAT_ID:
-        await _notify_moderator_about_question(context.bot, update, message_text, user, chat)
+        await _notify_moderator_about_question(
+            context.bot, update, message_text, user, chat, processing_error
+        )
 
 
-async def _notify_moderator_about_question(bot, update: Update, message_text: str, user, chat):
-    """Notify moderator about unanswerable question."""
+async def _notify_moderator_about_question(
+    bot,
+    update: Update,
+    message_text: str,
+    user,
+    chat,
+    processing_error: Optional[str] = None,
+):
+    """Notify moderator about unanswerable question with enhanced context."""
     try:
+        user_context = get_user_context(update)
         chat_title = chat.title if chat.title else f"Chat {chat.id}"
+
         if not update.message:
             return
+
         message_link = _build_message_link(chat.id, update.message.message_id)
+
+        error_info = f"\n**Error:** {processing_error}" if processing_error else ""
 
         moderator_message = (
             f"❓ **Student Question Alert**\n"
-            f"**Chat:** {chat_title}\n"
-            f"**User:** {user.first_name} {user.last_name or ''} (@{user.username or 'no_username'})\n"
-            f"**Question:** {message_text}\n"
-            f"**Link:** {message_link}"
+            f"**Chat:** {chat_title} (ID: {chat.id})\n"
+            f"**User:** {user.first_name} {user.last_name or ''} (@{user.username or 'no_username'}) (ID: {user.id})\n"
+            f"**Question:** {message_text[:500]}{'...' if len(message_text) > 500 else ''}\n"
+            f"**Link:** {message_link}{error_info}"
         )
 
         await bot.send_message(
@@ -154,70 +229,211 @@ async def _notify_moderator_about_question(bot, update: Update, message_text: st
             text=moderator_message,
             parse_mode="Markdown",
         )
-        logger.info("Moderator notification sent", extra={"chat_id": MODERATOR_CHAT_ID})
+
+        log_with_context(
+            update,
+            "info",
+            "Moderator notification sent",
+            {
+                "moderator_chat_id": MODERATOR_CHAT_ID,
+                "notification_type": "unanswerable_question",
+                "has_processing_error": bool(processing_error),
+                "user_context": user_context,
+            },
+        )
+
     except Exception as e:
-        logger.exception("Failed to notify moderator", extra={"error": str(e)})
+        log_with_context(
+            update,
+            "error",
+            "Failed to notify moderator",
+            {
+                "error": str(e),
+                "error_type": type(e).__name__,
+                "moderator_chat_id": MODERATOR_CHAT_ID,
+            },
+        )
 
 
-async def _handle_successful_answer(update: Update, context, llm_answer: str, user, chat, message_text: str):
-    """Handle successful LLM answers."""
-    logger.info(
-        "Question answered",
-        extra={"user_id": user.id, "response_length": len(llm_answer)},
+async def _handle_successful_answer(
+    update: Update, context, llm_answer: str, user, chat, message_text: str
+):
+    """Handle successful LLM answers with enhanced delivery guarantee."""
+    log_with_context(
+        update,
+        "info",
+        "Question answered successfully",
+        {
+            "response_length": len(llm_answer),
+            "response_preview": llm_answer[:100]
+            + ("..." if len(llm_answer) > 100 else ""),
+        },
     )
+
     log_user_info(update, "message_answered", {"response_length": len(llm_answer)})
 
-    success = await _try_send_response(update, llm_answer)
-    if not success:
-        await _handle_failed_response(context.bot, llm_answer, user, message_text)
+    # Multiple delivery attempts with different strategies
+    delivery_success = False
+    delivery_attempts = []
+
+    # Attempt 1: Original markdown
+    success, error = await _try_send_response_with_error(update, llm_answer, "markdown")
+    delivery_attempts.append({"method": "markdown", "success": success, "error": error})
+    if success:
+        delivery_success = True
+
+    # Attempt 2: Sanitized markdown
+    if not delivery_success:
+        sanitized = sanitize_markdown(llm_answer)
+        success, error = await _try_send_response_with_error(
+            update, sanitized, "sanitized_markdown"
+        )
+        delivery_attempts.append(
+            {"method": "sanitized_markdown", "success": success, "error": error}
+        )
+        if success:
+            delivery_success = True
+
+    # Attempt 3: Plain text (no markdown)
+    if not delivery_success:
+        success, error = await _try_send_response_with_error(
+            update, llm_answer, "plain_text"
+        )
+        delivery_attempts.append(
+            {"method": "plain_text", "success": success, "error": error}
+        )
+        if success:
+            delivery_success = True
+
+    # Log delivery attempts
+    log_with_context(
+        update,
+        "info" if delivery_success else "warning",
+        "Response delivery completed",
+        {
+            "delivery_success": delivery_success,
+            "attempts": delivery_attempts,
+            "total_attempts": len(delivery_attempts),
+        },
+    )
+
+    # If all delivery attempts failed, notify moderator
+    if not delivery_success:
+        await _handle_failed_response(
+            context.bot, llm_answer, user, message_text, update, delivery_attempts
+        )
 
 
-async def _try_send_response(update: Update, llm_answer: str) -> bool:
-    """Try to send response with markdown, fallback to sanitized markdown."""
-    if not update.message:
-        return False
-
-    if not update.effective_chat:
-        return False
+async def _try_send_response_with_error(
+    update: Update, response_text: str, method: str
+) -> tuple[bool, str]:
+    """Try to send response and return success status with error details."""
+    if not update.message or not update.effective_chat:
+        return False, "Missing message or chat"
 
     try:
-        await update.message.reply_text(llm_answer, parse_mode="Markdown")
-        logger.debug("Response sent with Markdown", extra={"chat_id": update.effective_chat.id})
-        return True
-    except Exception as markdown_error:
-        logger.warning("Markdown error", extra={"error": str(markdown_error)})
+        if method == "plain_text":
+            await update.message.reply_text(response_text)
+        else:
+            await update.message.reply_text(response_text, parse_mode="Markdown")
 
-        try:
-            sanitized = sanitize_markdown(llm_answer)
-            await update.message.reply_text(sanitized, parse_mode="Markdown")
-            logger.info("Response sent with sanitized Markdown", extra={"chat_id": update.effective_chat.id})
-            return True
-        except Exception as e:
-            logger.exception("Failed to send sanitized response", extra={"error": str(e)})
-            return False
+        log_with_context(
+            update, "debug", "Response sent successfully", {"method": method}
+        )
+        return True, ""
+
+    except Exception as e:
+        error_msg = f"{type(e).__name__}: {str(e)}"
+        log_with_context(
+            update,
+            "debug",
+            "Response send failed",
+            {"method": method, "error": error_msg},
+        )
+        return False, error_msg
 
 
-async def _handle_failed_response(bot, llm_answer: str, user, message_text: str):
-    """Handle cases where response couldn't be sent to user."""
+async def _handle_failed_response(
+    bot,
+    llm_answer: str,
+    user,
+    message_text: str,
+    update: Update,
+    delivery_attempts: list,
+):
+    """Handle cases where response couldn't be sent to user with comprehensive error reporting."""
     if not MODERATOR_CHAT_ID:
+        log_with_context(
+            update, "error", "Response delivery failed and no moderator configured"
+        )
         return
 
     try:
-        moderator_message = (
-            f"Failed to send answer to user {user.id} "
-            f"(username: {user.username}, name: {user.first_name} {user.last_name or ''}). "
-            f"Please review and forward if appropriate.\n\n"
-            f"Original query: {message_text}\n\nLLM Answer:\n{llm_answer}"
+        user_context = get_user_context(update)
+
+        # Format delivery attempts for moderator
+        attempts_summary = "\n".join(
+            [
+                f"- {attempt['method']}: {'✅' if attempt['success'] else '❌'} {attempt.get('error', '')}"
+                for attempt in delivery_attempts
+            ]
         )
+
+        moderator_message = (
+            f"🚨 **Failed to deliver answer**\n"
+            f"**User:** {user.first_name} {user.last_name or ''} (@{user.username or 'no_username'}) (ID: {user.id})\n"
+            f"**Chat:** {user_context.get('chat_title', 'Unknown')} (ID: {user_context.get('chat_id', 'Unknown')})\n"
+            f"**Query:** {message_text[:300]}{'...' if len(message_text) > 300 else ''}\n\n"
+            f"**Delivery Attempts:**\n{attempts_summary}\n\n"
+            f"**LLM Answer:**\n{llm_answer[:1000]}{'...' if len(llm_answer) > 1000 else ''}"
+        )
+
         await bot.send_message(chat_id=MODERATOR_CHAT_ID, text=moderator_message)
-        logger.info("Sent to moderator", extra={"chat_id": MODERATOR_CHAT_ID})
+
+        log_with_context(
+            update,
+            "info",
+            "Failed delivery reported to moderator",
+            {
+                "moderator_chat_id": MODERATOR_CHAT_ID,
+                "delivery_attempts_count": len(delivery_attempts),
+            },
+        )
+
     except Exception as final_error:
-        logger.exception("Failed to notify moderator", extra={"error": str(final_error)})
+        log_with_context(
+            update,
+            "error",
+            "Failed to notify moderator about delivery failure",
+            {
+                "error": str(final_error),
+                "error_type": type(final_error).__name__,
+                "moderator_chat_id": MODERATOR_CHAT_ID,
+            },
+        )
+
+
+async def _handle_processing_error(
+    update: Update, context, message_text: str, error: Exception
+):
+    """Handle processing errors by treating them as unanswerable questions."""
+    user = update.effective_user
+    chat = update.effective_chat
+
+    if user and chat:
+        await _handle_unanswerable_question(
+            update,
+            context,
+            message_text,
+            user,
+            chat,
+            processing_error=f"{type(error).__name__}: {str(error)}",
+        )
 
 
 def _build_message_link(chat_id: int, message_id: int) -> str:
     """Build Telegram message link."""
     chat_id_str = str(chat_id)
-    if chat_id_str.startswith('-100'):
+    if chat_id_str.startswith("-100"):
         return f"https://t.me/c/{chat_id_str[4:]}/{message_id}"
     return f"https://t.me/c/{chat_id}/{message_id}"

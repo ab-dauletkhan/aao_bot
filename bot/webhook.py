@@ -5,6 +5,9 @@ from datetime import datetime
 import time
 import json
 
+from .config import FAQ_CONTENT
+from .openai_client import client
+
 
 def create_webhook_handler(application):
     """Create a webhook handler using the provided application."""
@@ -52,8 +55,6 @@ def create_webhook_handler(application):
 async def health_check(request):
     """Health check endpoint."""
     logger.debug("Health check request")
-    from config import FAQ_CONTENT
-    from openai_client import client
 
     health_status = {
         "status": "healthy",
