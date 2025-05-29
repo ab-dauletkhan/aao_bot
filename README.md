@@ -143,24 +143,29 @@ PORT=you-may-skip-or-set-to-8443
 
 ## 📁 Project Structure
 
-```
-telegram-faq-bot/
-├── main.py                 # Application entry point
-├── config.py              # Configuration and environment variables
-├── logging_config.py      # Logging setup and configuration
-├── openai_client.py       # OpenAI API integration
-├── utils.py               # Utility functions and helpers
-├── webhook.py             # Webhook and health check handlers
-├── handlers/              # Telegram bot event handlers
-│   ├── __init__.py
-│   ├── commands.py        # Command handlers (/start, /stop, etc.)
-│   ├── messages.py        # Message processing and AI responses
-│   └── reactions.py       # Reaction-based moderation
+```sh
+aao_bot/
+├── bot/                   # Main bot application package
+│   ├── config.py          # Configuration and environment variables
+│   ├── log_setup.py       # Logging setup and configuration
+│   ├── main.py            # Application entry point
+│   ├── openai_client.py   # OpenAI API integration
+│   ├── utils.py           # Utility functions and helpers
+│   ├── webhook.py         # Webhook and health check handlers
+│   ├── requirements.txt   # Python dependencies
+│   └── handlers/          # Telegram bot event handlers
+│       ├── __init__.py
+│       ├── commands.py    # Command handlers (/start, /stop, etc.)
+│       ├── messages.py    # Message processing and AI responses
+│       ├── reactions.py   # Reaction-based moderation
+│       └── errors.py      # Error handling
 ├── logs/                  # Application logs (auto-created)
-├── requirements.txt       # Python dependencies
-├── .env.example          # Environment variables template
-├── faq.md                # FAQ content (you create this)
-└── README.md             # This file
+├── CODE_OF_CONDUCT.md     # Community guidelines
+├── CONTRIBUTING.md        # Contribution guidelines
+├── LICENSE                # MIT License
+├── pyrefly.toml           # Project configuration
+├── faq.md                 # FAQ content (you create this)
+└── README.md              # This file
 ```
 
 ## 🚀 Advanced Features
