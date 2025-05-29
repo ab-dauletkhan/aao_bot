@@ -1,0 +1,78 @@
+# Bytecode and cache
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.dmypy.json
+.pytype/
+.pyre/
+.pybuilder/
+
+# Logs and output
+*.log
+logs/
+*.json
+htmlcov/
+coverage.xml
+.coverage
+.coverage.*
+*.cover
+*.py,cover
+nosetests.xml
+
+# Local dev environments
+.venv/
+venv/
+ENV/
+env/
+env.bak/
+venv.bak/
+.pdm-python
+.pdm-build/
+__pypackages__/
+
+# Package build artifacts
+build/
+dist/
+*.egg-info/
+.eggs/
+*.egg
+MANIFEST
+downloads/
+wheels/
+share/python-wheels/
+sdist/
+
+# Dotenv and secrets
+.env
+.env.*
+.pypirc
+
+# Editor configs and IDE files
+*.swp
+*.swo
+.idea/
+.vscode/
+.spyderproject
+.spyproject
+.ropeproject
+.cursorignore
+.cursorindexingignore
+
+# System/OS artifacts
+.DS_Store
+Thumbs.db
+Desktop.ini
+.Spotlight-V100
+.Trashes
+
+# C extensions / binaries
+*.so
+*.out
+cython_debug/
+
+# Docker-specific
+Dockerfile
+.dockerignore
