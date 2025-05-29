@@ -1,6 +1,7 @@
 from telegram import Update
 from loguru import logger
 from typing import Dict, Any, Optional
+import datetime
 
 
 def sanitize_markdown(text: str) -> str:
@@ -63,7 +64,7 @@ def log_with_context(
     if extra_data:
         context.update(extra_data)
 
-    context["timestamp"] = __import__("datetime").datetime.now().isoformat()
+    context["timestamp"] = datetime.datetime.now().isoformat()
 
     log_func = getattr(logger, level.lower(), logger.info)
     log_func(message, extra=context)
@@ -78,7 +79,7 @@ def log_user_info(
     user_info = {
         **context,
         "action": action,
-        "timestamp": __import__("datetime").datetime.now().isoformat(),
+        "timestamp": datetime.datetime.now().isoformat(),
     }
     user_info.update(additional_info)
 
