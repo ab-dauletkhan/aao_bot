@@ -13,6 +13,7 @@ from bot.config import (
     WEBHOOK_LISTEN_IP,
     WEBHOOK_PORT,
     ADVISOR_USER_IDS,
+    OPENAI_API_KEY,
 )
 from bot.log_setup import setup_logging
 from bot.handlers.commands import start_command, stop_command, status_command
@@ -108,7 +109,7 @@ async def main_webhook():
     if not TELEGRAM_TOKEN:
         logger.critical("Missing TELEGRAM_BOT_TOKEN", extra={"error": "Cannot start"})
         return
-    if not __import__("bot.config").OPENAI_API_KEY:
+    if not OPENAI_API_KEY:
         logger.warning(
             "Missing OPENAI_API_KEY", extra={"warning": "Limited functionality"}
         )
@@ -141,7 +142,7 @@ def main_polling():
     if not TELEGRAM_TOKEN:
         logger.critical("Missing TELEGRAM_BOT_TOKEN", extra={"error": "Cannot start"})
         return
-    if not __import__("bot.config").OPENAI_API_KEY:
+    if not OPENAI_API_KEY:
         logger.warning(
             "Missing OPENAI_API_KEY", extra={"warning": "Limited functionality"}
         )
