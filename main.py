@@ -54,6 +54,11 @@ async def send_restart_notifications(application):
 async def setup_webhook_mode(application):
     """Setup webhook mode."""
     logger.info("Starting in Webhook Mode", extra={"phase": "webhook"})
+
+    # Initialize the application first
+    await application.initialize()
+    await application.start()
+
     webhook_url = (
         f"https://{WEBHOOK_DOMAIN.rstrip('/')}/{WEBHOOK_URL_PATH.lstrip('/')}"
     )
@@ -66,6 +71,8 @@ async def setup_webhook_mode(application):
         logger.info("Webhook set", extra={"url": webhook_url})
     except Exception as e:
         logger.exception("Webhook setup failed", extra={"error": str(e)})
+        await application.stop()
+        await application.shutdown()
         return
 
     app = web.Application()
@@ -88,6 +95,8 @@ async def setup_webhook_mode(application):
         logger.info("Shutdown signal received", extra={"phase": "shutdown"})
     finally:
         await runner.cleanup()
+        await application.stop()
+        await application.shutdown()
 
 
 async def post_init(application):
@@ -95,10 +104,10 @@ async def post_init(application):
     await send_restart_notifications(application)
 
 
-def main():
-    """Main function to start the bot."""
+async def main_webhook():
+    """Async main function for webhook mode."""
     setup_logging()
-    logger.info("=== Bot Initialization ===", extra={"phase": "init"})
+    logger.info("=== Bot Initialization (Webhook) ===", extra={"phase": "init"})
 
     if not TELEGRAM_TOKEN:
         logger.critical("Missing TELEGRAM_BOT_TOKEN", extra={"error": "Cannot start"})
@@ -123,12 +132,50 @@ def main():
     application.add_error_handler(error_handler)
     logger.info("All handlers registered")
 
+    await setup_webhook_mode(application)
+
+
+def main_polling():
+    """Main function for polling mode - runs synchronously."""
+    setup_logging()
+    logger.info("=== Bot Initialization (Polling) ===", extra={"phase": "init"})
+
+    if not TELEGRAM_TOKEN:
+        logger.critical("Missing TELEGRAM_BOT_TOKEN", extra={"error": "Cannot start"})
+        return
+    if not __import__("config").OPENAI_API_KEY:
+        logger.warning(
+            "Missing OPENAI_API_KEY", extra={"warning": "Limited functionality"}
+        )
+
+    logger.info("Creating Telegram application...")
+    application = ApplicationBuilder().token(TELEGRAM_TOKEN).post_init(post_init).build()
+    application.bot_data["BOT_IS_ACTIVE"] = True
+
+    logger.debug("Registering handlers")
+    application.add_handler(MessageReactionHandler(handle_reaction_downvote))
+    application.add_handler(CommandHandler("start", start_command))
+    application.add_handler(CommandHandler("stop", stop_command))
+    application.add_handler(CommandHandler("status", status_command))
+    application.add_handler(
+        MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message)
+    )
+    application.add_error_handler(error_handler)
+    logger.info("All handlers registered")
+
+    logger.info("Starting in Polling Mode", extra={"phase": "polling"})
+    # run_polling() handles its own event loop
+    application.run_polling(allowed_updates=["message", "message_reaction"])
+
+
+def main():
+    """Main function to start the bot in appropriate mode."""
     if WEBHOOK_DOMAIN and WEBHOOK_URL_PATH:
-        logger.info("Starting in Webhook Mode", extra={"phase": "webhook"})
-        asyncio.run(setup_webhook_mode(application))
+        # Webhook mode needs async event loop
+        asyncio.run(main_webhook())
     else:
-        logger.info("Starting in Polling Mode", extra={"phase": "polling"})
-        application.run_polling(allowed_updates=["message", "message_reaction"])
+        # Polling mode manages its own event loop
+        main_polling()
 
 
 if __name__ == "__main__":
