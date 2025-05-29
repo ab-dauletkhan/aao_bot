@@ -7,105 +7,137 @@ from loguru import logger
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handles the /start command for advisors only."""
-    logger.debug("Processing /start command...")
+    early_chat_id = "unknown_chat"
+    if update and update.effective_chat:
+        early_chat_id = update.effective_chat.id
 
-    if not update.message or not update.effective_user:
-        logger.warning(
-            "Invalid /start command", extra={"error": "Missing message or user"}
-        )
-        return
+    with logger.contextualize(chat_id=early_chat_id):
+        logger.debug("Processing /start command...")
 
-    user_id = update.effective_user.id
+        if not update.message or not update.effective_user:
+            logger.warning(
+                "Invalid /start command", extra={"error": "Missing message or user"}
+            )
+            return
 
-    if user_id not in ADVISOR_USER_IDS:
-        logger.warning("Non-advisor attempted /start", extra={"user_id": user_id})
-        log_user_info(update, "start_command_denied", {"reason": "Not in advisor list"})
-        await update.message.reply_text(
-            "Sorry, this command is only available to advisors."
-        )
-        return
+        user_id = update.effective_user.id
 
-    old_status = context.bot_data.get("BOT_IS_ACTIVE", True)
-    context.bot_data["BOT_IS_ACTIVE"] = True
+        # Ensure chat_id is properly set if it was resolved after initial unknown_chat
+        # and before log_user_info is called.
+        current_chat_id = early_chat_id
+        if update.effective_chat and update.effective_chat.id:
+            current_chat_id = update.effective_chat.id
+        
+        with logger.contextualize(chat_id=current_chat_id):
+            if user_id not in ADVISOR_USER_IDS:
+                logger.warning("Non-advisor attempted /start", extra={"user_id": user_id})
+                log_user_info(update, "start_command_denied", {"reason": "Not in advisor list"})
+                await update.message.reply_text(
+                    "Sorry, this command is only available to advisors."
+                )
+                return
 
-    logger.info(
-        "/start command executed",
-        extra={"user_id": user_id, "old_status": old_status, "new_status": True},
-    )
-    log_user_info(update, "start_command_success", {"previous_status": old_status})
+            old_status = context.bot_data.get("BOT_IS_ACTIVE", True)
+            context.bot_data["BOT_IS_ACTIVE"] = True
 
-    await update.message.reply_text(
-        "✅ Bot is now active and will respond to student questions."
-    )
+            logger.info(
+                "/start command executed",
+                extra={"user_id": user_id, "old_status": old_status, "new_status": True},
+            )
+            log_user_info(update, "start_command_success", {"previous_status": old_status})
+
+            await update.message.reply_text(
+                "✅ Bot is now active and will respond to student questions."
+            )
 
 
 async def stop_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handles the /stop command for advisors only."""
-    logger.debug("Processing /stop command...")
+    early_chat_id = "unknown_chat"
+    if update and update.effective_chat:
+        early_chat_id = update.effective_chat.id
 
-    if not update.message or not update.effective_user:
-        logger.warning(
-            "Invalid /stop command", extra={"error": "Missing message or user"}
-        )
-        return
+    with logger.contextualize(chat_id=early_chat_id):
+        logger.debug("Processing /stop command...")
 
-    user_id = update.effective_user.id
+        if not update.message or not update.effective_user:
+            logger.warning(
+                "Invalid /stop command", extra={"error": "Missing message or user"}
+            )
+            return
 
-    if user_id not in ADVISOR_USER_IDS:
-        logger.warning("Non-advisor attempted /stop", extra={"user_id": user_id})
-        log_user_info(update, "stop_command_denied", {"reason": "Not in advisor list"})
-        await update.message.reply_text(
-            "Sorry, this command is only available to advisors."
-        )
-        return
+        user_id = update.effective_user.id
+        
+        current_chat_id = early_chat_id
+        if update.effective_chat and update.effective_chat.id:
+            current_chat_id = update.effective_chat.id
 
-    old_status = context.bot_data.get("BOT_IS_ACTIVE", True)
-    context.bot_data["BOT_IS_ACTIVE"] = False
+        with logger.contextualize(chat_id=current_chat_id):
+            if user_id not in ADVISOR_USER_IDS:
+                logger.warning("Non-advisor attempted /stop", extra={"user_id": user_id})
+                log_user_info(update, "stop_command_denied", {"reason": "Not in advisor list"})
+                await update.message.reply_text(
+                    "Sorry, this command is only available to advisors."
+                )
+                return
 
-    logger.info(
-        "/stop command executed",
-        extra={"user_id": user_id, "old_status": old_status, "new_status": False},
-    )
-    log_user_info(update, "stop_command_success", {"previous_status": old_status})
+            old_status = context.bot_data.get("BOT_IS_ACTIVE", True)
+            context.bot_data["BOT_IS_ACTIVE"] = False
 
-    await update.message.reply_text(
-        "⏹️ Bot is now inactive and will not respond to student questions."
-    )
+            logger.info(
+                "/stop command executed",
+                extra={"user_id": user_id, "old_status": old_status, "new_status": False},
+            )
+            log_user_info(update, "stop_command_success", {"previous_status": old_status})
+
+            await update.message.reply_text(
+                "⏹️ Bot is now inactive and will not respond to student questions."
+            )
 
 
 async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Shows the current bot status for advisors."""
-    logger.debug("Processing /status command...")
+    early_chat_id = "unknown_chat"
+    if update and update.effective_chat:
+        early_chat_id = update.effective_chat.id
 
-    if not update.message or not update.effective_user:
-        logger.warning(
-            "Invalid /status command", extra={"error": "Missing message or user"}
-        )
-        return
+    with logger.contextualize(chat_id=early_chat_id):
+        logger.debug("Processing /status command...")
 
-    user_id = update.effective_user.id
+        if not update.message or not update.effective_user:
+            logger.warning(
+                "Invalid /status command", extra={"error": "Missing message or user"}
+            )
+            return
 
-    if user_id not in ADVISOR_USER_IDS:
-        logger.warning("Non-advisor attempted /status", extra={"user_id": user_id})
-        log_user_info(
-            update, "status_command_denied", {"reason": "Not in advisor list"}
-        )
-        await update.message.reply_text(
-            "Sorry, this command is only available to advisors."
-        )
-        return
+        user_id = update.effective_user.id
 
-    status_info = {
-        "bot_active": context.bot_data.get("BOT_IS_ACTIVE", True),
-        "faq_loaded": bool(__import__("config").FAQ_CONTENT),
-        "openai_connected": bool(__import__("openai_client").client),
-        "advisors_count": len(ADVISOR_USER_IDS),
-    }
+        current_chat_id = early_chat_id
+        if update.effective_chat and update.effective_chat.id:
+            current_chat_id = update.effective_chat.id
 
-    logger.info("Status command executed", extra={"user_id": user_id, **status_info})
-    log_user_info(update, "status_command_success", status_info)
+        with logger.contextualize(chat_id=current_chat_id):
+            if user_id not in ADVISOR_USER_IDS:
+                logger.warning("Non-advisor attempted /status", extra={"user_id": user_id})
+                log_user_info(
+                    update, "status_command_denied", {"reason": "Not in advisor list"}
+                )
+                await update.message.reply_text(
+                    "Sorry, this command is only available to advisors."
+                )
+                return
 
-    status_message = f"""
+            status_info = {
+                "bot_active": context.bot_data.get("BOT_IS_ACTIVE", True),
+                "faq_loaded": bool(__import__("config").FAQ_CONTENT),
+                "openai_connected": bool(__import__("openai_client").client),
+                "advisors_count": len(ADVISOR_USER_IDS),
+            }
+
+            logger.info("Status command executed", extra={"user_id": user_id, **status_info})
+            log_user_info(update, "status_command_success", status_info)
+
+            status_message = f"""
 📊 **Bot Status**
 Status: {"🟢 Active" if status_info["bot_active"] else "🔴 Inactive"}
 FAQ: {"✅ Loaded" if status_info["faq_loaded"] else "❌ Not loaded"}
@@ -113,4 +145,4 @@ OpenAI: {"✅ Connected" if status_info["openai_connected"] else "❌ Not connec
 Advisors: {len(ADVISOR_USER_IDS)} configured
     """
 
-    await update.message.reply_text(status_message, parse_mode="Markdown")
+            await update.message.reply_text(status_message, parse_mode="Markdown")
