@@ -57,6 +57,7 @@ async def setup_webhook_mode(application):
     # Initialize the application first
     await application.initialize()
     await application.start()
+    await send_restart_notifications(application)
 
     webhook_url = f"https://{WEBHOOK_DOMAIN.rstrip('/')}/{WEBHOOK_URL_PATH.lstrip('/')}"
     logger.info("Webhook URL set", extra={"url": webhook_url})
@@ -96,11 +97,6 @@ async def setup_webhook_mode(application):
         await application.shutdown()
 
 
-async def post_init(application):
-    """Post-initialization tasks."""
-    await send_restart_notifications(application)
-
-
 async def main_webhook():
     """Async main function for webhook mode."""
     setup_logging()
@@ -116,7 +112,7 @@ async def main_webhook():
 
     logger.info("Creating Telegram application...")
     application = (
-        ApplicationBuilder().token(TELEGRAM_TOKEN).post_init(post_init).build()  # type: ignore
+        ApplicationBuilder().token(TELEGRAM_TOKEN).build()
     )
     application.bot_data["BOT_IS_ACTIVE"] = True
 
@@ -149,7 +145,7 @@ def main_polling():
 
     logger.info("Creating Telegram application...")
     application = (
-        ApplicationBuilder().token(TELEGRAM_TOKEN).post_init(post_init).build()  # type: ignore
+        ApplicationBuilder().token(TELEGRAM_TOKEN).build()
     )
     application.bot_data["BOT_IS_ACTIVE"] = True
 
