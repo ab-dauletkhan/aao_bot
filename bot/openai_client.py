@@ -120,6 +120,7 @@ Ensure your response is in valid Markdown format, with proper syntax for *, _, `
                 "prompt_tokens": completion.usage.prompt_tokens,
                 "completion_tokens": completion.usage.completion_tokens,
                 "total_tokens": completion.usage.total_tokens,
+                "cached_tokens": completion.usage.prompt_token_details.cached_tokens,
             }
             logger.debug("Token usage", extra=token_context)
 
