@@ -78,7 +78,8 @@ Ensure your response is in valid Markdown format, with proper syntax for *, _, `
             messages=messages,
             temperature=0.2,
             max_tokens=1000,
-            timeout=30.0,  # 30 second timeout
+            timeout=30.0,
+            user="faq_bot",
         )
 
         # Response validation and processing
