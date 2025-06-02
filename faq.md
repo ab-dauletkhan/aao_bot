@@ -1,4 +1,4 @@
-# GENERAL QUESTIONS!
+# GENERAL QUESTIONS
 
 ## Who is my Advisor?
 
