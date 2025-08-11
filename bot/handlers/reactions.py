@@ -40,7 +40,7 @@ async def handle_reaction_downvote(update: Update, context: ContextTypes.DEFAULT
 
     logger.info("Reaction received", extra=reaction_context)
 
-    if user_id not in ADVISOR_USER_IDS:
+    if user_id != null and not in ADVISOR_USER_IDS:
         logger.debug(
             "Non-advisor reaction ignored",
             extra={
